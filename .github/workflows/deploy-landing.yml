@@ -26,12 +26,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: landing/package-lock.json
 
       - name: 📦 Install dependencies
         working-directory: landing
-        run: npm ci
+        run: npm install --legacy-peer-deps
 
       - name: 🏗️ Build landing page
         working-directory: landing
@@ -45,4 +43,3 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: landing/dist
           cname: ''
-
