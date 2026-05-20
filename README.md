@@ -187,74 +187,28 @@ flowchart LR
 
 ---
 
-# Cách cài đặt
-<details open>
-<summary>Tự cài đặt </summary>
+# Cài đặt
 
+## ⬇️ Tải xuống nhanh
 
+<p>
+  <a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-Setup-26.4.0.exe">
+    <img src="https://img.shields.io/badge/%F0%9F%AA%9F_Windows-Deplao--Setup--26.4.0.exe-0078d4?style=for-the-badge" alt="Download Windows" />
+  </a>
+  &nbsp;
+  <a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-26.4.0-arm64.dmg">
+    <img src="https://img.shields.io/badge/%F0%9F%8D%8E_macOS_M1%2B-Deplao--26.4.0--arm64.dmg-000000?style=for-the-badge" alt="Download macOS Apple Silicon" />
+  </a>
+  &nbsp;
+  <a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-26.4.0.dmg">
+    <img src="https://img.shields.io/badge/%F0%9F%8D%8E_macOS_Intel-Deplao--26.4.0.dmg-000000?style=for-the-badge" alt="Download macOS Intel" />
+  </a>
+</p>
 
-## Yêu cầu
-
-- Windows 10/11 hoặc macOS
-- Node.js 18+ khuyến nghị
-- npm 9+
-
-## Cài đặt
-
-```powershell
-npm install --legacy-peer-deps
-```
-
-## Chạy development
-
-```powershell
-npm run dev
-```
-
-## Build app
-
-
-```powershell
-npm run production
-```
-
-## Dữ liệu cục bộ
-
-- Dữ liệu app dùng SQLite cục bộ
-- Có thể đổi thư mục lưu trữ trong phần `Cài đặt`
-
-
-</details>
+👉 Tất cả phiên bản: https://github.com/babyvibe/deplao-builder/releases
 
 <details>
-<summary> Tải đã build sẵn </summary>
-
-
-Deplao hỗ trợ nhiều hệ điều hành. Bạn có thể tải phiên bản phù hợp theo nhu cầu tại trang Releases:
-
-
-👉 https://github.com/babyvibe/deplao-builder/releases
-
----
-
-### 🖥️ Chọn phiên bản phù hợp:
-
-- 🪟 **Windows**  
-  Chọn file có dạng: `*.exe`
-
-- 🍎 **macOS (Apple Silicon - M1/M2/M3/M4/M5)**  
-  Chọn file có dạng: `*-arm64.dmg`
-
-- 🍎 **macOS (Intel)**  
-  Chọn file có dạng: `*.dmg`
-
----
-
-💡 **Lưu ý:**
-- Luôn chọn phiên bản mới nhất (ở trên cùng)
-- Đảm bảo tải đúng file tương ứng với hệ điều hành để tránh lỗi khi cài đặt
-
-## ⚠️ Lưu ý khi mở file cài đặt
+<summary>⚠️ Lưu ý khi mở file cài đặt (bị chặn bởi Windows / macOS)</summary>
 
 Do Deplao chưa được ký chứng chỉ (code signing) - nói thẳng ra là nghèo, nên hệ điều hành có thể hiển thị cảnh báo khi mở file. Bạn có thể làm theo hướng dẫn dưới đây:
 
@@ -262,7 +216,7 @@ Do Deplao chưa được ký chứng chỉ (code signing) - nói thẳng ra là 
 
 ### 🪟 Windows (.exe)
 
-Khi mở file `.exe`, Windows có thể hiển thị cảnh báo **“Windows protected your PC”**:
+Khi mở file `.exe`, Windows có thể hiển thị cảnh báo **"Windows protected your PC"**:
 
 👉 Cách xử lý:
 1. Nhấn **More info**
@@ -272,7 +226,7 @@ Khi mở file `.exe`, Windows có thể hiển thị cảnh báo **“Windows pr
 
 ### 🍎 macOS (.dmg)
 
-Khi mở file `.dmg`, macOS có thể báo **“cannot be opened because it is from an unidentified developer”**
+Khi mở file `.dmg`, macOS có thể báo **"cannot be opened because it is from an unidentified developer"**
 
 👉 Cách xử lý:
 
@@ -286,6 +240,41 @@ Khi mở file `.dmg`, macOS có thể báo **“cannot be opened because it is f
 3. Nhấn **Open Anyway**
 
 </details>
+
+<details>
+<summary>🛠️ Tự build từ source</summary>
+
+### Yêu cầu
+
+- Windows 10/11 hoặc macOS
+- Node.js 18+ khuyến nghị
+- npm 9+
+
+### Cài đặt
+
+```powershell
+npm install --legacy-peer-deps
+```
+
+### Chạy development
+
+```powershell
+npm run dev
+```
+
+### Build app
+
+```powershell
+npm run production
+```
+
+### Dữ liệu cục bộ
+
+- Dữ liệu app dùng SQLite cục bộ
+- Có thể đổi thư mục lưu trữ trong phần `Cài đặt`
+
+</details>
+
 
 ## 🚀 Deplao là gì?
 
