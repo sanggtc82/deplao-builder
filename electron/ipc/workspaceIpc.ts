@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import * as http from 'http';
+import * as https from 'https';
 import WorkspaceManager, { Workspace } from '../../src/utils/WorkspaceManager';
 import AppModeManager from '../../src/utils/AppModeManager';
 import DatabaseService from '../../src/services/database/DatabaseService';
@@ -11,9 +12,11 @@ import EventBroadcaster from '../../src/services/event/EventBroadcaster';
 import Logger from '../../src/utils/Logger';
 
 /**
- * HTTP POST helper for remote login requests.
+ * HTTP/HTTPS POST helper for remote login requests.
+ * Automatically uses https module for https:// URLs.
+ * Adds bypass-tunnel-reminder header for loca.lt tunnels.
  */
-function httpPost(url: string, body: any, timeoutMs = 10000): Promise<any> {
+function httpPost(url: string, body: any, timeoutMs = 15000): Promise<any> {
     return new Promise((resolve, reject) => {
         let parsed: URL;
         try {
@@ -23,15 +26,22 @@ function httpPost(url: string, body: any, timeoutMs = 10000): Promise<any> {
             return;
         }
         const data = JSON.stringify(body);
+        const isHttps = parsed.protocol === 'https:';
+        const transport = isHttps ? https : http;
+        const isTunnel = parsed.hostname.includes('loca.lt') ||
+                         parsed.hostname.includes('localtunnel') ||
+                         parsed.hostname.includes('ngrok') ||
+                         parsed.hostname.includes('serveo');
 
-        const req = http.request({
+        const req = (transport as typeof https).request({
             hostname: parsed.hostname,
-            port: parsed.port || '80',
-            path: parsed.pathname,
+            port: parsed.port || (isHttps ? '443' : '80'),
+            path: parsed.pathname + (parsed.search || ''),
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Content-Length': Buffer.byteLength(data),
+                ...(isTunnel ? { 'bypass-tunnel-reminder': 'true' } : {}),
             },
             timeout: timeoutMs,
         }, (res) => {
@@ -41,7 +51,9 @@ function httpPost(url: string, body: any, timeoutMs = 10000): Promise<any> {
                 try {
                     resolve(JSON.parse(responseBody));
                 } catch {
-                    reject(new Error('Phản hồi không hợp lệ từ boss server'));
+                    // HTML interstitial or non-JSON response
+                    const preview = responseBody.slice(0, 200);
+                    reject(new Error(`Phản hồi không hợp lệ từ boss server: ${preview}`));
                 }
             });
         });
@@ -57,7 +69,7 @@ function httpPost(url: string, body: any, timeoutMs = 10000): Promise<any> {
         });
         req.on('timeout', () => {
             req.destroy();
-            reject(new Error('Hết thời gian kết nối (10s) — kiểm tra lại IP/Port'));
+            reject(new Error(`Hết thời gian kết nối (${timeoutMs / 1000}s) — kiểm tra lại địa chỉ Boss`));
         });
 
         req.write(data);

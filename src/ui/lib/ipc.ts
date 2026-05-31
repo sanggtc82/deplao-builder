@@ -23,10 +23,10 @@ declare global {
         fetchUrl: (args: { url: string }) => Promise<{ success: boolean; data?: string; contentType?: string; statusCode?: number; error?: string }>;
       };
       login: {
-        loginQR: (tempId: string) => Promise<any>;
+        loginQR: (tempId: string, proxyId?: number | null) => Promise<any>;
         loginQRAbort: (tempId: string) => Promise<any>;
         loginCookies: (imei: string, cookies: string, userAgent: string) => Promise<any>;
-        loginAuth: (authJson: string) => Promise<any>;
+        loginAuth: (authJson: string, proxyId?: number | null) => Promise<any>;
         connectAccount: (auth: any) => Promise<any>;
         disconnectAccount: (zaloId: string) => Promise<any>;
         disconnectAll: () => Promise<any>;
@@ -408,8 +408,11 @@ declare global {
       relay: {
         startServer: (port?: number) => Promise<{ success: boolean; port?: number; error?: string }>;
         stopServer: () => Promise<{ success: boolean; error?: string }>;
-        getServerStatus: () => Promise<{ success: boolean; running?: boolean; port?: number; connectedEmployees?: any[]; localIPs?: string[]; error?: string }>;
+        getServerStatus: () => Promise<{ success: boolean; running?: boolean; port?: number; connectedEmployees?: any[]; localIPs?: string[]; tunnelActive?: boolean; tunnelUrl?: string | null; error?: string }>;
         kickEmployee: (employeeId: string) => Promise<{ success: boolean; error?: string }>;
+        startTunnel: () => Promise<{ success: boolean; tunnelUrl?: string; error?: string }>;
+        stopTunnel: () => Promise<{ success: boolean; error?: string }>;
+        getTunnelStatus: () => Promise<{ success: boolean; active?: boolean; tunnelUrl?: string | null; error?: string }>;
       };
       sync: {
         requestFullSync: (zaloIds: string[]) => Promise<{ success: boolean; error?: string }>;
@@ -440,6 +443,16 @@ declare global {
         changeThreadEmoji:    (params: { accountId: string; threadId: string; emoji: string }) => Promise<{ success: boolean; error?: string }>;
         changeNickname:       (params: { accountId: string; threadId: string; userId: string; nickname: string }) => Promise<{ success: boolean; error?: string }>;
         loginWithCredentials: (params: { username: string; password: string; twoFASecret?: string }) => Promise<{ success: boolean; result?: any; error?: string }>;
+      };
+      // ─── Proxy ───────────────────────────────────────────────────────────
+      proxy: {
+        list:          () => Promise<{ success: boolean; proxies: any[]; error?: string }>;
+        save:          (proxy: any) => Promise<{ success: boolean; id?: number; proxy?: any; error?: string }>;
+        update:        (id: number, proxy: any) => Promise<{ success: boolean; proxy?: any; error?: string }>;
+        delete:        (id: number) => Promise<{ success: boolean; error?: string }>;
+        setAccount:    (zaloId: string, proxyId: number | null) => Promise<{ success: boolean; error?: string }>;
+        getForAccount: (zaloId: string) => Promise<{ success: boolean; proxy?: any; error?: string }>;
+        test:          (proxy: any) => Promise<{ success: boolean; ms?: number; status?: number; error?: string }>;
       };
       erp: {
       projectList:         (params?: { archived?: boolean }) => Promise<{ success: boolean; projects: any[]; error?: string }>;
@@ -593,6 +606,7 @@ export const ipc = {
   sync: window.electronAPI?.sync,
   relay: window.electronAPI?.relay,
   fb: window.electronAPI?.fb,
+  proxy: window.electronAPI?.proxy,
   erp,
   on: window.electronAPI?.on,
   removeAllListeners: window.electronAPI?.removeAllListeners,

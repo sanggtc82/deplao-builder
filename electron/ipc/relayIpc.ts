@@ -38,5 +38,29 @@ export function registerRelayIpc(): void {
         }
     });
 
-    Logger.log('[relayIpc] Registered 4 relay IPC channels');
+    ipcMain.handle('relay:startTunnel', async () => {
+        try {
+            return await relay().startTunnel();
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('relay:stopTunnel', async () => {
+        try {
+            return await relay().stopTunnel();
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('relay:getTunnelStatus', async () => {
+        try {
+            return { success: true, ...relay().getTunnelStatus() };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    Logger.log('[relayIpc] Registered 7 relay IPC channels');
 }

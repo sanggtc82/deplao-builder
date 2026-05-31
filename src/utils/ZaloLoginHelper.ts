@@ -6,6 +6,7 @@ import DatabaseService from "../services/database/DatabaseService";
 import * as fs from "fs";
 import { imageSize } from "image-size";
 import { extractUserProfile } from "./profileUtils";
+import { createProxyAgent } from "./ProxyHelper";
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_BASE_MS = 5000; // 5s base, exponential backoff
@@ -14,8 +15,8 @@ class ZaloLoginHelper {
 
     constructor() {}
 
-    private createZaloConfig(options: any = {}) {
-        return {
+    private createZaloConfig(options: any = {}, proxyAgent?: any) {
+        const cfg: any = {
             selfListen: options.selfListen !== undefined ? options.selfListen : true,
             checkUpdate: options.checkUpdate !== undefined ? options.checkUpdate : false,
             logging: options.logging !== undefined ? options.logging : false,
@@ -39,13 +40,45 @@ class ZaloLoginHelper {
                 }
             },
         };
+        if (proxyAgent) {
+            cfg.agent = proxyAgent;
+            // Native global.fetch (undici) ignores the agent option entirely.
+            // node-fetch v2 properly forwards the agent to proxy-agent (which handles all proxy types).
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const nodeFetch = require('node-fetch');
+            // Capture proxyAgent in closure so ALL requests — login, sendMessage, getUserInfo,
+            // WebSocket upgrade, file upload, etc. — always go through the proxy.
+            // We explicitly spread `agent: proxyAgent` into every request's options so that
+            // even if zca-js doesn't forward cfg.agent in a particular request, the proxy
+            // is always applied by the polyfill itself.
+            const capturedAgent = proxyAgent;
+            cfg.polyfill = async (url: string, options: any) => {
+                // Always inject the proxy agent — do NOT rely on zca-js forwarding cfg.agent
+                const res = await nodeFetch(url, { ...options, agent: capturedAgent });
+                // Patch each response to expose getSetCookie() — zca-js uses this to correctly parse
+                // cookies with commas in values (e.g. Expires dates in checkSession redirect).
+                // node-fetch v2 Headers lacks getSetCookie(); fallback split(", ") breaks those cookies.
+                if (typeof res.headers.getSetCookie !== 'function') {
+                    res.headers.getSetCookie = () => {
+                        const raw = (res.headers as any).raw?.() ?? {};
+                        return (raw['set-cookie'] as string[]) || [];
+                    };
+                }
+                return res;
+            };
+        }
+        return cfg;
     }
 
     /**
      * Đăng nhập QR Code
      */
-    public async loginQR(tempId: string): Promise<void> {
-        const zalo = new Zalo(this.createZaloConfig({ selfListen: true }));
+    public async loginQR(tempId: string, proxyId?: number | null): Promise<void> {
+        // Khởi tạo proxy agent nếu có
+        const proxyAgent = proxyId
+            ? createProxyAgent(DatabaseService.getInstance().getProxyById(proxyId))
+            : undefined;
+        const zalo = new Zalo(this.createZaloConfig({ selfListen: true }, proxyAgent));
         let account = { avatar: '', displayName: '' };
         let abortFn: (() => unknown) | null = null;
 
@@ -105,6 +138,9 @@ class ZaloLoginHelper {
             cookies: cookiesJson,
             imei: context.imei,
             userAgent: context.userAgent,
+            // Preserve proxyId so auto-reconnect (scheduleReconnect) uses the
+            // correct proxy without relying on the cookie-string DB lookup fallback.
+            proxyId: proxyId ?? null,
         };
 
         // 1. Kiểm tra trước nếu đây là tài khoản mới (chưa có trong DB)
@@ -125,6 +161,10 @@ class ZaloLoginHelper {
                 is_active: 1,
                 created_at: new Date().toISOString(),
             });
+            // Gắn proxy nếu có
+            if (proxyId) {
+                DatabaseService.getInstance().setAccountProxy(zaloId, proxyId);
+            }
             Logger.log(`[ZaloLoginHelper] Account ${zaloId} saved to DB`);
         } catch (dbErr: any) {
             Logger.error(`[ZaloLoginHelper] Failed to save account: ${dbErr.message}`);
@@ -166,7 +206,19 @@ class ZaloLoginHelper {
     // Map lưu các abort functions cho QR đang chờ
     private static activeQRAbortFns: Map<string, () => void> = new Map();
     // Set lưu các group IDs đã fetch info để tránh gọi lại
+    // ⚠️ FIX: giới hạn 2000 entries để tránh memory leak không giới hạn
     private static fetchedGroupIds: Set<string> = new Set();
+    private static readonly MAX_FETCHED_GROUP_CACHE = 2000;
+
+    /** Add key vào fetchedGroupIds với LRU-eviction khi đầy */
+    private static addToFetchedGroupCache(key: string): void {
+        if (ZaloLoginHelper.fetchedGroupIds.size >= ZaloLoginHelper.MAX_FETCHED_GROUP_CACHE) {
+            // Xóa entry cũ nhất (first inserted)
+            const firstKey = ZaloLoginHelper.fetchedGroupIds.values().next().value;
+            if (firstKey) ZaloLoginHelper.fetchedGroupIds.delete(firstKey);
+        }
+        ZaloLoginHelper.fetchedGroupIds.add(key);
+    }
     // Đếm số lần reconnect đang thử cho mỗi account
     private static reconnectAttempts: Map<string, number> = new Map();
     // Timer handles để có thể cancel
@@ -302,11 +354,11 @@ class ZaloLoginHelper {
 
             // Nếu đã có đầy đủ cả tên lẫn members → đánh dấu và bỏ qua
             if (hasRealName && hasMembers) {
-                ZaloLoginHelper.fetchedGroupIds.add(cacheKey);
+                ZaloLoginHelper.addToFetchedGroupCache(cacheKey);
                 return;
             }
 
-            ZaloLoginHelper.fetchedGroupIds.add(cacheKey); // Mark before fetch to prevent parallel calls
+            ZaloLoginHelper.addToFetchedGroupCache(cacheKey); // Mark before fetch to prevent parallel calls
 
             const res = await api.getGroupInfo(groupId);
             const groupData = res?.changed_groups?.[groupId] || res?.gridInfoMap?.[groupId];
@@ -444,8 +496,11 @@ class ZaloLoginHelper {
     /**
      * Đăng nhập bằng Cookies/IMEI
      */
-    public async loginCookies(imei: string, cookies: string, userAgent: string): Promise<any> {
-        const zalo = new Zalo(this.createZaloConfig({ selfListen: true }));
+    public async loginCookies(imei: string, cookies: string, userAgent: string, proxyId?: number | null): Promise<any> {
+        const proxyAgent = proxyId
+            ? createProxyAgent(DatabaseService.getInstance().getProxyById(proxyId))
+            : undefined;
+        const zalo = new Zalo(this.createZaloConfig({ selfListen: true }, proxyAgent));
 
         const credentials: Partial<Credentials> = {
             cookie: JSON.parse(cookies),
@@ -462,7 +517,7 @@ class ZaloLoginHelper {
             const isNewAccount = !DatabaseService.getInstance().hasAccount(zaloId);
             const accountInfo = await api.fetchAccountInfo();
 
-            await this.connectZaloUser({ imei, cookies, userAgent }, api);
+            await this.connectZaloUser({ imei, cookies, userAgent, proxyId: proxyId ?? null }, api);
 
             // Nếu là tài khoản mới → fetch toàn bộ bạn bè + nhóm + thành viên ngầm
             if (isNewAccount) {
@@ -482,7 +537,7 @@ class ZaloLoginHelper {
      * Kết nối user, thiết lập listeners
      */
     public async connectZaloUser(
-        auth: { cookies: string; imei: string; userAgent: string },
+        auth: { cookies: string; imei: string; userAgent: string; proxyId?: number | null },
         api?: API
     ): Promise<boolean> {
         try {
@@ -563,9 +618,26 @@ class ZaloLoginHelper {
      * Đăng nhập Zalo (internal)
      */
     public async loginZalo(
-        auth: { cookies: string; imei: string; userAgent: string }
+        auth: { cookies: string; imei: string; userAgent: string; proxyId?: number | null }
     ): Promise<API> {
-        const zalo = new Zalo(this.createZaloConfig({ selfListen: true }));
+        // Khởi tạo proxy agent nếu auth có proxyId
+        let proxyAgent: any;
+        if (auth.proxyId) {
+            const proxyConfig = DatabaseService.getInstance().getProxyById(auth.proxyId);
+            proxyAgent = createProxyAgent(proxyConfig);
+        } else {
+            // Thử lấy proxy từ DB theo cookies (khi reconnect sau khởi động)
+            try {
+                const accounts = DatabaseService.getInstance().getAccounts();
+                const match = accounts.find((a: any) => a.cookies === auth.cookies);
+                if ((match as any)?.proxy_id) {
+                    const proxyConfig = DatabaseService.getInstance().getProxyById((match as any).proxy_id);
+                    proxyAgent = createProxyAgent(proxyConfig);
+                }
+            } catch {}
+        }
+
+        const zalo = new Zalo(this.createZaloConfig({ selfListen: true }, proxyAgent));
 
         let cookieParsed: any;
         try {
@@ -717,15 +789,16 @@ class ZaloLoginHelper {
                     const db = DatabaseService.getInstance();
                     let isKnown = false;
 
-                    // Kiểm tra bảng thành viên nhóm trước
+                    // ⚠️ FIX: Dùng single-row lookup thay vì load toàn bộ contacts.
+                    // db.getContacts() tải TOÀN BỘ danh sách contacts mỗi reaction → memory spike tích lũy → OOM.
+                    // Kiểm tra bảng thành viên nhóm trước (nếu là group reaction)
                     if (isGroup && threadId) {
                         const members = db.getGroupMembers(zaloId, threadId);
                         isKnown = members.some((m: any) => m.member_id === uidFrom);
                     }
-                    // Kiểm tra bảng contacts nếu chưa tìm thấy
+                    // Kiểm tra bằng single-row lookup thay vì load toàn bộ contacts
                     if (!isKnown) {
-                        const contacts = db.getContacts(zaloId);
-                        isKnown = contacts.some((c: any) => c.contact_id === uidFrom);
+                        isKnown = !!db.getContactById(zaloId, uidFrom);
                     }
 
                     if (!isKnown) {
@@ -819,9 +892,22 @@ class ZaloLoginHelper {
         listener.on("old_messages", async (messages: any[]) => {
             Logger.log(`[ZaloLoginHelper] 📩 RAW old_messages event: ${messages.length} messages`);
             try {
-                for (const message of messages) {
-                    message.zaloId = zaloId;
-                    await EventBroadcaster.broadcastMessage(zaloId, message, { silent: true });
+                // ⚠️ FIX: Xử lý theo batch thay vì tuần tự từng tin.
+                // Loop tuần tự 500+ tin → flood IPC → renderer unresponsive → màn đen.
+                // Giải pháp: batch 50 tin song song + yield event loop giữa các batch.
+                const BATCH_SIZE = 50;
+                for (let i = 0; i < messages.length; i += BATCH_SIZE) {
+                    const batch = messages.slice(i, i + BATCH_SIZE);
+                    await Promise.allSettled(
+                        batch.map((message: any) => {
+                            message.zaloId = zaloId;
+                            return EventBroadcaster.broadcastMessage(zaloId, message, { silent: true });
+                        })
+                    );
+                    // Yield event loop giữa các batch để main process xử lý IPC khác
+                    if (i + BATCH_SIZE < messages.length) {
+                        await new Promise<void>((r) => setTimeout(r, 30));
+                    }
                 }
             } catch (error: any) {
                 Logger.error(`[ZaloLoginHelper] old_messages error: ${error.message}`);

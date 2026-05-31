@@ -28,11 +28,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ─── Login / Account ─────────────────────────────────────────────
   login: {
-    loginQR: (tempId: string) => ipcRenderer.invoke('login:qr', { tempId }),
+    loginQR: (tempId: string, proxyId?: number | null) => ipcRenderer.invoke('login:qr', { tempId, proxyId }),
     loginQRAbort: (tempId: string) => ipcRenderer.invoke('login:qr:abort', { tempId }),
     loginCookies: (imei: string, cookies: string, userAgent: string) =>
       ipcRenderer.invoke('login:cookies', { imei, cookies, userAgent }),
-    loginAuth: (authJson: string) => ipcRenderer.invoke('login:auth', { authJson }),
+    loginAuth: (authJson: string, proxyId?: number | null) => ipcRenderer.invoke('login:auth', { authJson, proxyId }),
     connectAccount: (auth: any) => ipcRenderer.invoke('login:connect', { auth }),
     disconnectAccount: (zaloId: string) => ipcRenderer.invoke('login:disconnect', { zaloId }),
     disconnectAll: () => ipcRenderer.invoke('login:disconnectAll'),
@@ -406,6 +406,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     stopServer:          () => ipcRenderer.invoke('relay:stopServer'),
     getServerStatus:     () => ipcRenderer.invoke('relay:getServerStatus'),
     kickEmployee:        (employeeId: string) => ipcRenderer.invoke('relay:kickEmployee', { employeeId }),
+    startTunnel:         () => ipcRenderer.invoke('relay:startTunnel'),
+    stopTunnel:          () => ipcRenderer.invoke('relay:stopTunnel'),
+    getTunnelStatus:     () => ipcRenderer.invoke('relay:getTunnelStatus'),
   },
 
   // ─── Data Sync (Employee) ──────────────────────────────────────────
@@ -559,6 +562,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'tunnel:changed',
       'relay:employeeListUpdate',
       'relay:messageSentByEmployee',
+      'relay:tunnelStatusUpdate',
       'sync:progress',
       'workspace:switched',
       'workspace:connectionStatus',
@@ -604,6 +608,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);
+  },
+
+  // ─── Proxy ───────────────────────────────────────────────────────────────
+  proxy: {
+    list:          ()                              => ipcRenderer.invoke('proxy:list'),
+    save:          (proxy: any)                    => ipcRenderer.invoke('proxy:save', { proxy }),
+    update:        (id: number, proxy: any)        => ipcRenderer.invoke('proxy:update', { id, proxy }),
+    delete:        (id: number)                    => ipcRenderer.invoke('proxy:delete', { id }),
+    setAccount:    (zaloId: string, proxyId: number | null) => ipcRenderer.invoke('proxy:setAccount', { zaloId, proxyId }),
+    getForAccount: (zaloId: string)                => ipcRenderer.invoke('proxy:getForAccount', { zaloId }),
+    test:          (proxy: any)                    => ipcRenderer.invoke('proxy:test', { proxy }),
   },
 });
 

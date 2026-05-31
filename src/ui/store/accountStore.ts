@@ -21,6 +21,8 @@ export interface AccountInfo {
   channel?: Channel;
   /** Real Facebook UID (only for FB accounts) */
   facebook_id?: string;
+  /** ID proxy đang gắn với tài khoản */
+  proxy_id?: number | null;
 }
 
 interface AccountStore {

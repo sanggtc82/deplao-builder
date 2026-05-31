@@ -4,6 +4,20 @@ import { useWorkspaceStore, WorkspaceInfo } from '@/store/workspaceStore';
 import { useAppStore } from '@/store/appStore';
 import { showConfirm } from '../common/ConfirmDialog';
 
+/**
+ * Build a normalized Boss URL from an address input and optional port.
+ * - If address is already a full URL (http:// or https://), use as-is (ignore port)
+ * - Otherwise prepend http:// and append :port
+ */
+function buildBossUrl(address: string, port: string): string {
+    if (!address) return '';
+    if (address.startsWith('http://') || address.startsWith('https://')) {
+        return address.replace(/\/+$/, '');
+    }
+    const p = port || '9900';
+    return `http://${address}:${p}`;
+}
+
 // ── WorkspaceSettings ─────────────────────────────────────────────────────────
 
 export default function WorkspaceSettings() {
@@ -263,7 +277,7 @@ function CreateWorkspaceForm({ onCreated, onCancel }: { onCreated: () => void; o
                     return;
                 }
 
-                const bossUrl = `http://${ip.trim()}:${port.trim()}`;
+                const bossUrl = buildBossUrl(ip.trim(), port.trim());
 
                 // Step 2: Login to boss to get token
                 setLoginStep('logging-in');
@@ -435,8 +449,15 @@ function EditWorkspaceForm({ workspace, connectionStatus, onSaved, onCancel }: {
 
     // Parse IP + Port from existing bossUrl
     const parseBossUrl = (url: string) => {
+        if (!url) return { ip: '', port: '9900' };
         try {
             const parsed = new URL(url);
+            // Tunnel URL (https:// or non-standard hostname) — preserve full URL
+            if (parsed.protocol === 'https:' || parsed.hostname.includes('.')) {
+                // Return the full URL as the "ip" so the user can see and edit it
+                // Port field will be hidden when ip is a full URL
+                return { ip: url.replace(/\/+$/, ''), port: parsed.port || '9900' };
+            }
             return { ip: parsed.hostname, port: parsed.port || '9900' };
         } catch {
             // Try without protocol
@@ -459,7 +480,7 @@ function EditWorkspaceForm({ workspace, connectionStatus, onSaved, onCancel }: {
         try {
             const updates: any = { name: name.trim(), icon: icon.trim() || undefined };
             if (isRemote) {
-                updates.bossUrl = ip.trim() && port.trim() ? `http://${ip.trim()}:${port.trim()}` : workspace.bossUrl;
+                updates.bossUrl = ip.trim() ? buildBossUrl(ip.trim(), port.trim()) : workspace.bossUrl;
                 updates.employeeUsername = username.trim();
                 updates.autoConnect = autoConnect;
             }
@@ -488,7 +509,7 @@ function EditWorkspaceForm({ workspace, connectionStatus, onSaved, onCancel }: {
 
         setConnecting(true);
         try {
-            const bossUrl = `http://${ip.trim()}:${port.trim()}`;
+            const bossUrl = buildBossUrl(ip.trim(), port.trim());
 
             // Step 1: Login to get fresh token
             const loginRes = await ipc.workspace?.loginRemote(bossUrl, username.trim(), password);
@@ -563,15 +584,17 @@ function EditWorkspaceForm({ workspace, connectionStatus, onSaved, onCancel }: {
                         <input
                             value={ip}
                             onChange={e => setIp(e.target.value)}
-                            placeholder="IP Boss — 192.168.1.100"
+                            placeholder="192.168.1.100 hoặc https://xxxx.loca.lt"
                             className="flex-1 text-xs bg-gray-700 border border-gray-600 rounded-lg px-3 py-1.5 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
                         />
+                        {!ip.startsWith('http') && (
                         <input
                             value={port}
                             onChange={e => setPort(e.target.value)}
                             placeholder="Port"
                             className="w-20 text-xs bg-gray-700 border border-gray-600 rounded-lg px-3 py-1.5 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
                         />
+                        )}
                     </div>
                     <input
                         value={username}

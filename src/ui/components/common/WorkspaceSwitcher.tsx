@@ -3,6 +3,15 @@ import { useWorkspaceStore, WorkspaceInfo } from '@/store/workspaceStore';
 import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 
+/** Build normalized Boss URL — handles both IP:Port and full tunnel URL */
+function buildBossUrl(address: string, port: string): string {
+    if (!address) return '';
+    if (address.startsWith('http://') || address.startsWith('https://')) {
+        return address.replace(/\/+$/, '');
+    }
+    return `http://${address}:${port || '9900'}`;
+}
+
 // ── WorkspaceSwitcher ─────────────────────────────────────────────────────────
 // Compact dropdown in TopBar — shows active workspace + quick switch.
 // Only visible when multi-workspace mode is active.
@@ -247,7 +256,7 @@ function CreateWorkspaceInline({ onCreated, onCancel }: { onCreated: () => void;
                     setCreating(false);
                     return;
                 }
-                const bossUrl = `http://${ip.trim()}:${port.trim() || '9900'}`;
+                const bossUrl = buildBossUrl(ip.trim(), port.trim() || '9900');
 
                 setStep('logging-in');
                 const loginRes = await ipc.workspace?.loginRemote(bossUrl, username.trim(), password);
@@ -322,15 +331,17 @@ function CreateWorkspaceInline({ onCreated, onCancel }: { onCreated: () => void;
                         <input
                             value={ip}
                             onChange={e => setIp(e.target.value)}
-                            placeholder="IP — 192.168.1.100"
+                            placeholder="IP:Port hoặc https://xxxx.loca.lt"
                             className="flex-1 text-xs bg-gray-700 border border-gray-600 rounded-lg px-2.5 py-1.5 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
                         />
+                        {!ip.startsWith('http') && (
                         <input
                             value={port}
                             onChange={e => setPort(e.target.value)}
                             placeholder="Port"
                             className="w-14 text-xs bg-gray-700 border border-gray-600 rounded-lg px-2 py-1.5 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
                         />
+                        )}
                     </div>
                     <input
                         value={username}

@@ -1,6 +1,6 @@
 {
   "name": "Deplao",
-  "version": "26.4.2",
+  "version": "26.4.3",
   "description": "Phần mềm desktop quản lý Zalo Đa tài khoản tích hợp CRM, ERP, POS, Workflow và AI Assistant giúp đội nhóm bán hàng, chăm sóc khách hàng và marketing trên Zalo vận hành tập trung trong một ứng dụng duy nhất.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -9,7 +9,7 @@
     "dev": "npm run build:electron && concurrently -n VITE,TSC,ELECTRON -c cyan,magenta,yellow \"vite\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on http://localhost:5713 && cross-env NODE_ENV=development electron dist-electron/electron/main.js\"",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:renderer": "vite build",
-    "production": "tsc -p tsconfig.electron.prod.json && npm run build:renderer && electron-builder --publish never"
+    "production": "tsc -p tsconfig.electron.prod.json && node scripts/strip-console.js && npm run build:renderer && electron-builder --publish never"
   },
   "author": "https://github.com/babyvibe",
   "license": "ISC",
@@ -19,11 +19,13 @@
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.9.0",
     "bytenode": "^1.5.7",
+    "cloudflared": "^0.7.1",
     "dompurify": "^3.4.1",
     "electron-store": "^8.2.0",
     "electron-updater": "^6.8.3",
     "ffmpeg-static": "^5.3.0",
     "googleapis": "^171.4.0",
+    "https-proxy-agent": "^9.0.0",
     "image-size": "^2.0.2",
     "jsonwebtoken": "^9.0.3",
     "localtunnel": "^2.0.2",
@@ -32,11 +34,13 @@
     "node-fetch": "^2.7.0",
     "nodemailer": "^8.0.3",
     "otplib": "^13.4.0",
+    "proxy-agent": "^8.0.1",
     "quill": "^2.0.3",
     "react-quill-new": "^3.8.3",
     "react-zoom-pan-pinch": "^3.7.0",
     "reactflow": "^11.11.4",
     "recharts": "^3.8.0",
+    "socks-proxy-agent": "^10.0.0",
     "tough-cookie": "^5.0.0",
     "uuid": "^13.0.0",
     "zca-js": "^2.1.2"
@@ -100,8 +104,18 @@
     "afterPack": "./scripts/after-pack.js",
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "dir", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "resources/icons/icon.ico",
       "signAndEditExecutable": false
@@ -114,8 +128,20 @@
     },
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] },
-        { "target": "zip", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "icon": "resources/icons/icon.icns",
       "category": "public.app-category.social-networking",
@@ -126,7 +152,10 @@
       "title": "Deplao"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "icon": "resources/icons/icon.png",
       "category": "Network"
     }

@@ -7,8 +7,8 @@ export default class LoginService {
         this.loginHelper = new ZaloLoginHelper();
     }
 
-    public async loginQR(tempId: string) {
-        return await this.loginHelper.loginQR(tempId);
+    public async loginQR(tempId: string, proxyId?: number | null) {
+        return await this.loginHelper.loginQR(tempId, proxyId);
     }
 
     public async connectUser(auth: any): Promise<boolean> {
@@ -27,8 +27,8 @@ export default class LoginService {
         }
     }
 
-    public async loginCookies(imei: any, cookies: any, userAgent: any) {
-        return await this.loginHelper.loginCookies(imei, cookies, userAgent);
+    public async loginCookies(imei: any, cookies: any, userAgent: any, proxyId?: number | null) {
+        return await this.loginHelper.loginCookies(imei, cookies, userAgent, proxyId);
     }
 
     public async requestOldMessages(auth: any) {

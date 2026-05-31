@@ -30,26 +30,46 @@ function TosFooter() {
 }
 
 type Channel = 'zalo' | 'facebook';
+type Step = 'channel' | 'proxy' | 'detail';
 
 export default function AddAccountModal({ onClose }: AddAccountModalProps) {
-  const [step, setStep] = useState<'channel' | 'detail'>('channel');
+  const [step, setStep] = useState<Step>('channel');
   const [channel, setChannel] = useState<Channel>('zalo');
   const [tab, setTab] = useState<'qr' | 'cookie'>('qr');
+  const [selectedProxyId, setSelectedProxyId] = useState<number | null>(null);
+  const [proxies, setProxies] = useState<any[]>([]);
+  const [proxyLoading, setProxyLoading] = useState(false);
+
+  // Load proxies khi bước proxy được hiển thị
+  useEffect(() => {
+    if (step === 'proxy') {
+      setProxyLoading(true);
+      ipc.proxy?.list().then((res) => {
+        setProxies(res?.proxies || []);
+      }).finally(() => setProxyLoading(false));
+    }
+  }, [step]);
 
   const handleSelectChannel = (ch: Channel) => {
     setChannel(ch);
-    setStep('detail');
+    if (ch === 'zalo') {
+      setStep('proxy');
+    } else {
+      setStep('detail');
+    }
   };
 
   const handleBack = () => {
-    setStep('channel');
+    if (step === 'detail' && channel === 'zalo') setStep('proxy');
+    else if (step === 'proxy') setStep('channel');
+    else setStep('channel');
   };
 
-  const headerTitle = step === 'channel'
-    ? 'Thêm tài khoản'
-    : channel === 'zalo'
-      ? 'Đăng nhập Zalo cá nhân'
-      : 'Đăng nhập Facebook cá nhân';
+  const headerTitle =
+    step === 'channel' ? 'Thêm tài khoản'
+    : step === 'proxy' ? 'Chọn Proxy (tuỳ chọn)'
+    : channel === 'zalo' ? 'Đăng nhập Zalo cá nhân'
+    : 'Đăng nhập Facebook cá nhân';
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -57,7 +77,7 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
           <div className="flex items-center gap-3">
-            {step === 'detail' && (
+            {step !== 'channel' && (
               <button
                 onClick={handleBack}
                 className="text-gray-400 hover:text-white transition-colors"
@@ -130,9 +150,35 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
           </div>
         )}
 
-        {/* Step 2 — Login Detail */}
+        {/* Step 2 — Proxy selection (chỉ Zalo) */}
+        {step === 'proxy' && (
+          <ProxySelectStep
+            proxies={proxies}
+            loading={proxyLoading}
+            selectedProxyId={selectedProxyId}
+            onSelect={setSelectedProxyId}
+            onContinue={() => setStep('detail')}
+          />
+        )}
+
+        {/* Step 3 — Login Detail */}
         {step === 'detail' && channel === 'zalo' && (
           <>
+            {/* Proxy indicator */}
+            {selectedProxyId && proxies.length > 0 && (
+              <div className="px-6 pt-3 pb-0">
+                <div className="flex items-center gap-2 bg-green-900/20 border border-green-700/40 rounded-lg px-3 py-1.5">
+                  <span className="text-green-400 text-sm">🔒</span>
+                  <span className="text-xs text-green-300">
+                    Proxy: <strong>{proxies.find(p => p.id === selectedProxyId)?.name}</strong>
+                  </span>
+                  <button
+                    onClick={() => setSelectedProxyId(null)}
+                    className="ml-auto text-gray-500 hover:text-gray-300 text-xs"
+                  >✕</button>
+                </div>
+              </div>
+            )}
             {/* Zalo sub-tabs */}
             <div className="flex border-b border-gray-700">
               {(['qr', 'cookie'] as const).map((t) => (
@@ -151,9 +197,9 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
             </div>
             <div className="p-6">
               {tab === 'qr' ? (
-                <QRLoginTab onSuccess={onClose} />
+                <QRLoginTab onSuccess={onClose} proxyId={selectedProxyId} />
               ) : (
-                <CookieLoginTab onSuccess={onClose} />
+                <CookieLoginTab onSuccess={onClose} proxyId={selectedProxyId} />
               )}
             </div>
           </>
@@ -169,11 +215,184 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
   );
 }
 
+// ─── Proxy Select Step ────────────────────────────────────────────────────────
+function ProxySelectStep({
+  proxies,
+  loading,
+  selectedProxyId,
+  onSelect,
+  onContinue,
+}: {
+  proxies: any[];
+  loading: boolean;
+  selectedProxyId: number | null;
+  onSelect: (id: number | null) => void;
+  onContinue: () => void;
+}) {
+  const { setView, setAddAccountModalOpen } = useAppStore();
+  const [testState, setTestState] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
+  const [testError, setTestError] = useState('');
+
+  const selectedProxy = proxies.find((p) => p.id === selectedProxyId);
+
+  const handleTest = async () => {
+    if (!selectedProxy) return;
+    setTestState('testing');
+    setTestError('');
+    const res = await ipc.proxy?.test(selectedProxy);
+    if (res?.success) {
+      setTestState('ok');
+    } else {
+      setTestState('fail');
+      setTestError(res?.error || 'Proxy không hoạt động');
+    }
+  };
+
+  // Reset test state khi đổi proxy
+  const handleSelect = (id: number | null) => {
+    onSelect(id);
+    setTestState('idle');
+    setTestError('');
+  };
+
+  return (
+    <div className="p-6 space-y-4">
+      <p className="text-gray-400 text-sm">
+        Chọn proxy cho tài khoản này (không bắt buộc).
+        Nếu bỏ qua, tài khoản sẽ kết nối trực tiếp.
+      </p>
+
+      {loading ? (
+        <div className="flex justify-center py-6">
+          <svg className="animate-spin w-6 h-6 text-blue-400" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+        </div>
+      ) : proxies.length === 0 ? (
+        <div className="text-center py-6 space-y-3">
+          <div className="text-3xl">🔒</div>
+          <p className="text-sm text-gray-400">Chưa có proxy nào được cài đặt</p>
+          <button
+            onClick={() => {
+              setAddAccountModalOpen(false);
+              setView('settings');
+              window.dispatchEvent(new CustomEvent('nav:settings', { detail: { tab: 'proxy' } }));
+            }}
+            className="text-blue-400 hover:text-blue-300 text-xs underline"
+          >
+            Vào Cài đặt → Proxy để thêm
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2 max-h-56 overflow-y-auto">
+          {/* Option: No proxy */}
+          <button
+            onClick={() => handleSelect(null)}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${
+              selectedProxyId === null
+                ? 'border-blue-500 bg-blue-500/10 text-white'
+                : 'border-gray-600 text-gray-400 hover:border-gray-500'
+            }`}
+          >
+            <span className="text-lg">🚫</span>
+            <div className="text-left">
+              <p className="text-sm font-medium">Không dùng proxy</p>
+              <p className="text-xs text-gray-500">Kết nối trực tiếp</p>
+            </div>
+            {selectedProxyId === null && (
+              <svg className="ml-auto text-blue-400" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M20 6L9 17l-5-5" stroke="currentColor" fill="none" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )}
+          </button>
+          {proxies.map((proxy) => (
+            <button
+              key={proxy.id}
+              onClick={() => handleSelect(proxy.id)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${
+                selectedProxyId === proxy.id
+                  ? 'border-blue-500 bg-blue-500/10 text-white'
+                  : 'border-gray-600 text-gray-400 hover:border-gray-500'
+              }`}
+            >
+              <span className="text-lg">🔒</span>
+              <div className="text-left flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{proxy.name}</p>
+                <p className="text-xs text-gray-500 font-mono truncate">
+                  {proxy.type.toUpperCase()} · {proxy.host}:{proxy.port}
+                </p>
+              </div>
+              {selectedProxyId === proxy.id && (
+                <svg className="ml-auto text-blue-400 flex-shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M20 6L9 17l-5-5" stroke="currentColor" fill="none" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Test proxy section (khi đã chọn proxy cụ thể) */}
+      {selectedProxy && (
+        <div className={`rounded-xl p-3 border ${
+          testState === 'ok' ? 'bg-green-900/20 border-green-700/40' :
+          testState === 'fail' ? 'bg-red-900/20 border-red-700/40' :
+          'bg-gray-750 border-gray-600'
+        }`}>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-400">Kiểm tra kết nối proxy trước khi đăng nhập</span>
+            <button
+              type="button"
+              onClick={handleTest}
+              disabled={testState === 'testing'}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                testState === 'ok' ? 'text-green-400 bg-green-900/30' :
+                testState === 'fail' ? 'text-red-400 bg-red-900/30' :
+                'text-blue-400 bg-blue-900/30 hover:bg-blue-900/50'
+              }`}
+            >
+              {testState === 'testing' ? (
+                <><svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg> Đang test...</>
+              ) : testState === 'ok' ? '✅ Kết nối tốt'
+              : testState === 'fail' ? '🔄 Test lại'
+              : '🔌 Test ngay'}
+            </button>
+          </div>
+          {testState === 'fail' && testError && (
+            <p className="mt-2 text-xs text-red-400">⚠️ {testError}</p>
+          )}
+        </div>
+      )}
+
+      {/* Cảnh báo khi proxy lỗi */}
+      {testState === 'fail' && (
+        <div className="bg-yellow-900/20 border border-yellow-700/40 rounded-xl p-3">
+          <p className="text-xs text-yellow-400 font-medium">⚠️ Proxy không hoạt động</p>
+          <p className="text-xs text-yellow-300/70 mt-1">
+            Đăng nhập qua proxy lỗi sẽ thất bại. Bạn vẫn có thể tiếp tục không dùng proxy.
+          </p>
+        </div>
+      )}
+
+      <button
+        onClick={onContinue}
+        className="btn-primary text-white w-full"
+      >
+        {selectedProxyId ? '✅ Tiếp tục với proxy' : 'Tiếp tục không có proxy →'}
+      </button>
+    </div>
+  );
+}
+
 // ─── QR Login Tab ─────────────────────────────────────────────────────────────
 
 const QR_TIMEOUT_SECONDS = 60;
 
-function QRLoginTab({ onSuccess }: { onSuccess: () => void }) {
+function QRLoginTab({ onSuccess, proxyId }: { onSuccess: () => void; proxyId?: number | null }) {
   const [qrData, setQrData] = useState<string>('');
   const [status, setStatus] = useState<'idle' | 'loading' | 'waiting' | 'scanned' | 'success' | 'expired' | 'error'>('idle');
   const [timeLeft, setTimeLeft] = useState(QR_TIMEOUT_SECONDS);
@@ -210,7 +429,7 @@ function QRLoginTab({ onSuccess }: { onSuccess: () => void }) {
     clearTimer();
 
     console.log('[QRLoginTab] Starting QR with tempId:', tempId.current);
-    await ipc.login?.loginQR(tempId.current);
+    await ipc.login?.loginQR(tempId.current, proxyId ?? null);
   };
 
   const handleRefresh = async () => {
@@ -463,7 +682,7 @@ function FacebookLoginTab({ onSuccess }: { onSuccess: () => void }) {
 
 // ─── Cookie Login Tab ─────────────────────────────────────────────────────────
 
-function CookieLoginTab({ onSuccess }: { onSuccess: () => void }) {
+function CookieLoginTab({ onSuccess, proxyId }: { onSuccess: () => void; proxyId?: number | null }) {
   const [authJson, setAuthJson] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -490,7 +709,7 @@ function CookieLoginTab({ onSuccess }: { onSuccess: () => void }) {
     setLoading(true);
     setError('');
     try {
-      const result = await ipc.login?.loginAuth(authJson.trim());
+      const result = await ipc.login?.loginAuth(authJson.trim(), proxyId ?? null);
       if (result?.success) {
         showNotification('Đăng nhập thành công! 🎉 Đang hoàn tất thiết lập tài khoản...', 'success');
         const res = await ipc.login?.getAccounts();

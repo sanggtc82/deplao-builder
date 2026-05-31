@@ -14,6 +14,26 @@ interface VersionEntry {
 // ─── Changelog data — thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.4.3',
+    date: '05/2026',
+    type: 'minor',
+    highlights: [
+      '🌐 Kết nối nhân viên qua WAN — boss và nhân viên giờ có thể làm việc từ bất kỳ đâu, không chỉ cùng mạng LAN',
+      '🔒 Nâng cấp quản lý Proxy — chọn proxy riêng cho từng tài khoản trước khi đăng nhập',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Hỗ trợ kết nối nhân viên qua WAN: Boss bật Cloudflare Tunnel — app tự tạo URL công khai an toàn, nhân viên nhập URL đó để kết nối từ xa mà không cần cùng mạng nội bộ',
+          'Thêm nút "Bật Tunnel WAN" trong Cài đặt → Nhân viên → Relay Server — một click để tạo địa chỉ truy cập từ xa',
+          'Thêm màn hình cài đặt Proxy trước khi đăng nhập tài khoản Zalo — hỗ trợ HTTP, HTTPS và SOCKS5',
+          'Mỗi tài khoản Zalo có thể gán proxy độc lập — không ảnh hưởng đến các tài khoản khác trong cùng app, một proxy có thể gắn nhiều tài khoản.',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.4.2',
     date: '05/2026',
     type: 'patch',

@@ -1024,6 +1024,21 @@ class DatabaseService {
             CREATE INDEX IF NOT EXISTS idx_fb_crm_account ON fb_crm_contacts(fb_account_id);
         `);
 
+        // ─── Proxies ─────────────────────────────────────────────────────────────
+        this.exec(`
+            CREATE TABLE IF NOT EXISTS proxies (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL DEFAULT '',
+                type        TEXT NOT NULL DEFAULT 'http',
+                host        TEXT NOT NULL DEFAULT '',
+                port        INTEGER NOT NULL DEFAULT 0,
+                username    TEXT DEFAULT '',
+                password    TEXT DEFAULT '',
+                created_at  INTEGER NOT NULL DEFAULT 0,
+                updated_at  INTEGER NOT NULL DEFAULT 0
+            );
+        `);
+
     }
 
     // ─── ERP Schema ────────────────────────────────────────────────────────────
@@ -1605,10 +1620,21 @@ class DatabaseService {
                 db!.exec(`ALTER TABLE crm_contact_tags ADD COLUMN channel TEXT DEFAULT 'zalo'`);
                 db!.exec(`ALTER TABLE crm_notes ADD COLUMN channel TEXT DEFAULT 'zalo'`);
                 this.save();
-                Logger.log('[DatabaseService] ✅ Migration: added channel to CRM tables');
+                Logger.log('[DatabaseService] ��� Migration: added channel to CRM tables');
             }
         } catch (err: any) {
             Logger.warn(`[DatabaseService] Migration CRM channel: ${err.message}`);
+        }
+
+        // ─── Migration: add proxy_id to accounts ──────────────────────────────────
+        try {
+            const accCols2 = this.query<any>(`PRAGMA table_info(accounts)`);
+            if (!accCols2.some((c: any) => c.name === 'proxy_id')) {
+                db!.exec(`ALTER TABLE accounts ADD COLUMN proxy_id INTEGER DEFAULT NULL`);
+                Logger.log('[DatabaseService] ✅ Migration: added proxy_id column to accounts');
+            }
+        } catch (err: any) {
+            Logger.warn(`[DatabaseService] Migration proxy_id: ${err.message}`);
         }
 
         // Migration: create friends table if missing
@@ -2306,6 +2332,72 @@ class DatabaseService {
     /** Đánh dấu trạng thái listener (1 = active, 0 = dead/failed) */
     public setListenerActive(zaloId: string, active: boolean): void {
         this.run('UPDATE accounts SET listener_active = ? WHERE zalo_id = ?', [active ? 1 : 0, zaloId]);
+    }
+
+    // ─── Proxy CRUD ───────────────────────────────────────────────────────────
+
+    /** Lưu proxy mới, trả về id */
+    public saveProxy(proxy: { name: string; type: string; host: string; port: number; username?: string; password?: string }): number {
+        const now = Date.now();
+        const result = db!.prepare(
+            `INSERT INTO proxies (name, type, host, port, username, password, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(proxy.name, proxy.type, proxy.host, proxy.port, proxy.username || '', proxy.password || '', now, now);
+        return result.lastInsertRowid as number;
+    }
+
+    /** Cập nhật proxy theo id */
+    public updateProxy(id: number, proxy: { name?: string; type?: string; host?: string; port?: number; username?: string; password?: string }): void {
+        const now = Date.now();
+        const sets: string[] = [];
+        const vals: any[] = [];
+        if (proxy.name !== undefined) { sets.push('name = ?'); vals.push(proxy.name); }
+        if (proxy.type !== undefined) { sets.push('type = ?'); vals.push(proxy.type); }
+        if (proxy.host !== undefined) { sets.push('host = ?'); vals.push(proxy.host); }
+        if (proxy.port !== undefined) { sets.push('port = ?'); vals.push(proxy.port); }
+        if (proxy.username !== undefined) { sets.push('username = ?'); vals.push(proxy.username); }
+        if (proxy.password !== undefined) { sets.push('password = ?'); vals.push(proxy.password); }
+        if (sets.length === 0) return;
+        sets.push('updated_at = ?'); vals.push(now);
+        vals.push(id);
+        db!.prepare(`UPDATE proxies SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    }
+
+    /** Xóa proxy và gỡ khỏi mọi tài khoản đang dùng */
+    public deleteProxy(id: number): void {
+        db!.prepare(`UPDATE accounts SET proxy_id = NULL WHERE proxy_id = ?`).run(id);
+        db!.prepare(`DELETE FROM proxies WHERE id = ?`).run(id);
+    }
+
+    /** Lấy danh sách proxies kèm số tài khoản đang dùng */
+    public getProxies(): any[] {
+        return this.query<any>(
+            `SELECT p.*, COUNT(a.id) as account_count
+             FROM proxies p
+             LEFT JOIN accounts a ON a.proxy_id = p.id AND a.is_active = 1
+             GROUP BY p.id
+             ORDER BY p.created_at DESC`
+        );
+    }
+
+    /** Lấy proxy theo id */
+    public getProxyById(id: number): any | null {
+        return this.queryOne<any>('SELECT * FROM proxies WHERE id = ?', [id]) || null;
+    }
+
+    /** Gắn/gỡ proxy cho tài khoản */
+    public setAccountProxy(zaloId: string, proxyId: number | null): void {
+        this.run('UPDATE accounts SET proxy_id = ? WHERE zalo_id = ?', [proxyId, zaloId]);
+    }
+
+    /** Lấy proxy đang gắn với tài khoản (null nếu không có) */
+    public getAccountProxy(zaloId: string): any | null {
+        return this.queryOne<any>(
+            `SELECT p.* FROM proxies p
+             INNER JOIN accounts a ON a.proxy_id = p.id
+             WHERE a.zalo_id = ?`,
+            [zaloId]
+        ) || null;
     }
 
     private decryptCookies(encrypted: string): string {

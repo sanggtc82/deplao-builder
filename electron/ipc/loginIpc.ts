@@ -20,10 +20,10 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
 
 
     // ─── Đăng nhập QR ─────────────────────────────────────────────────────
-    ipcMain.handle('login:qr', async (_event, { tempId }) => {
+    ipcMain.handle('login:qr', async (_event, { tempId, proxyId }) => {
         try {
             console.log(`[loginIpc] Starting QR login for tempId: ${tempId}`);
-            loginService.loginQR(tempId).catch((err) => {
+            loginService.loginQR(tempId, proxyId ?? null).catch((err) => {
                 console.error(`[loginIpc] QR login error: ${err.message}`);
             });
             return { success: true };
@@ -45,7 +45,7 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
 
     // ─── Đăng nhập bằng JSON auth (1 ô paste) ────────────────────────────
     // Format: { "imei": "...", "cookies": "...", "userAgent": "..." }
-    ipcMain.handle('login:auth', async (_event, { authJson }) => {
+    ipcMain.handle('login:auth', async (_event, { authJson, proxyId }) => {
         try {
             if (!authJson) return { success: false, error: 'Thiếu auth JSON' };
             let parsed: any;
@@ -60,7 +60,7 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
             }
 
             Logger.log(`[loginIpc] Starting auth JSON login...`);
-            const accountInfo = await loginService.loginCookies(imei, cookies, userAgent);
+            const accountInfo = await loginService.loginCookies(imei, cookies, userAgent, proxyId ?? null);
 
             // Tìm zaloId từ ConnectionManager
             let zaloId = '';
@@ -85,6 +85,10 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
                     is_active: 1,
                     created_at: new Date().toISOString(),
                 });
+                // Gắn proxy nếu có
+                if (proxyId) {
+                    DatabaseService.getInstance().setAccountProxy(zaloId, proxyId);
+                }
                 DatabaseService.getInstance().setListenerActive(zaloId, true);
                 postLoginSetup(zaloId, mainWindow, fullName, phoneNum);
             }
@@ -221,6 +225,7 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
                 const fbUuid = isFB ? fbIdToUuid[acc.zalo_id] : undefined;
                 return {
                     ...acc,
+                    proxy_id: (acc as any).proxy_id ?? null,
                     isOnline: isFB
                         ? !!(fbUuid && FacebookConnectionManager.get(fbUuid)?.isConnected())
                         : ConnectionManager.isConnected(acc.zalo_id),
@@ -282,6 +287,7 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
                         imei: acc.imei,
                         cookies: acc.cookies,
                         userAgent: acc.user_agent,
+                        proxyId: (acc as any).proxy_id ?? null,
                     };
                     await loginService.connectUser(auth);
                     results.push({ zaloId: acc.zalo_id, success: true });

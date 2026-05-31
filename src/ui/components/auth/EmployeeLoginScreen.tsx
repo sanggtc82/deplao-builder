@@ -13,12 +13,16 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
     const { setMode, setCurrentEmployee, setPermissions, setAssignedAccounts, setBossUrl, setBossConnected, setSyncProgress, setLastSyncTime } = useEmployeeStore();
 
     const [tab, setTab] = useState<'boss' | 'employee'>('boss');
-    const [bossIp, setBossIp] = useState('');
-    const [bossPort, setBossPort] = useState('9900');
+    const [bossAddress, setBossAddress] = useState('');
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [connecting, setConnecting] = useState(false);
     const [error, setError] = useState('');
+
+    // Detect if user entered a full URL (tunnel) vs IP:PORT (LAN)
+    const isTunnelUrl = bossAddress.startsWith('https://') || bossAddress.startsWith('http://');
+    // Build bossUrl for connectToBoss (IP:PORT or full tunnel URL)
+    const bossUrl = isTunnelUrl ? bossAddress.trim() : `${bossAddress.trim()}`;
 
     // Sync progress state
     const [syncing, setSyncing] = useState(false);
@@ -32,8 +36,8 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
             const saved = localStorage.getItem('deplao_employee_login');
             if (saved) {
                 const data = JSON.parse(saved);
-                if (data.bossIp) setBossIp(data.bossIp);
-                if (data.bossPort) setBossPort(data.bossPort);
+                if (data.bossAddress) setBossAddress(data.bossAddress);
+                else if (data.bossIp) setBossAddress(data.bossIp + (data.bossPort ? `:${data.bossPort}` : ':9900'));
                 if (data.username) setUsername(data.username);
             }
         } catch { /* */ }
@@ -46,7 +50,7 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
 
     const handleEmployeeLogin = async () => {
         setError('');
-        if (!bossIp.trim()) { setError('Vui lòng nhập địa chỉ IP của BOSS'); return; }
+        if (!bossAddress.trim()) { setError('Vui lòng nhập địa chỉ BOSS (IP:Port hoặc tunnel URL)'); return; }
         if (!username.trim()) { setError('Vui lòng nhập tên đăng nhập'); return; }
         if (!password) { setError('Vui lòng nhập mật khẩu'); return; }
 
@@ -62,7 +66,6 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
             }
 
             // Step 2: Connect to Boss via main process
-            const bossUrl = `${bossIp.trim()}:${bossPort.trim()}`;
             const connectRes = await ipc.employee?.connectToBoss(bossUrl, authRes.token);
             if (!connectRes?.success) {
                 setError(connectRes?.error || 'Kết nối tới BOSS thất bại');
@@ -75,8 +78,7 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
 
             // Save for next time
             localStorage.setItem('deplao_employee_login', JSON.stringify({
-                bossIp: bossIp.trim(),
-                bossPort: bossPort.trim(),
+                bossAddress: bossAddress.trim(),
                 username: username.trim(),
             }));
 
@@ -256,24 +258,19 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
                                 Kết nối tới máy Boss để nhận và quản lý tin nhắn. BOSS cần bật Relay Server.
                             </p>
 
-                            {/* Boss IP */}
-                            <div className="grid grid-cols-3 gap-2">
-                                <div className="col-span-2">
-                                    <label className="text-[11px] text-gray-500 mb-1 block">Địa chỉ IP BOSS</label>
-                                    <input
-                                        value={bossIp} onChange={e => setBossIp(e.target.value)}
-                                        placeholder="192.168.1.100"
-                                        className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-200 placeholder-gray-500"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="text-[11px] text-gray-500 mb-1 block">Cổng</label>
-                                    <input
-                                        value={bossPort} onChange={e => setBossPort(e.target.value)}
-                                        placeholder="9900"
-                                        className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-200 placeholder-gray-500"
-                                    />
-                                </div>
+                            {/* Boss Address (IP:Port hoặc Tunnel URL) */}
+                            <div>
+                                <label className="text-[11px] text-gray-500 mb-1 block">Địa chỉ BOSS</label>
+                                <input
+                                    value={bossAddress} onChange={e => setBossAddress(e.target.value)}
+                                    placeholder="192.168.1.100:9900 hoặc https://xxxx.loca.lt"
+                                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-sm text-gray-200 placeholder-gray-500"
+                                />
+                                <p className="text-[10px] text-gray-600 mt-1">
+                                    {isTunnelUrl
+                                        ? '🌐 Kết nối qua internet (Tunnel URL)'
+                                        : '🏠 Kết nối qua LAN (IP:Port)'}
+                                </p>
                             </div>
 
                             {/* Credentials */}

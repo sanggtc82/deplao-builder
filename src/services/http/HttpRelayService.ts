@@ -6,6 +6,7 @@ import DatabaseService from '../database/DatabaseService';
 import DataSyncService from '../employee/DataSyncService';
 import EventBroadcaster from '../event/EventBroadcaster';
 import ConnectionManager from '../../utils/ConnectionManager';
+import TunnelService from '../tunnel/TunnelService';
 
 interface RegisteredEmployee {
     employee_id: string;
@@ -19,6 +20,8 @@ interface RegisteredEmployee {
     ip_address: string;
     connected_at: number;
     consecutiveFailures: number;
+    /** Timestamp until which a heavy sync is in progress — offline check skips during this window */
+    syncingUntil?: number;
 }
 
 interface EmployeeSnapshot {
@@ -63,6 +66,23 @@ class HttpRelayService {
     private employees = new Map<string, RegisteredEmployee>(); // employeeId → employee
     private pinnedDbPath: string | null = null;
     private offlineCheckTimer: ReturnType<typeof setInterval> | null = null;
+
+    /** SSE clients: employeeId → ServerResponse (persistent event stream) */
+    private sseClients = new Map<string, http.ServerResponse>();
+    /** Keepalive timers for SSE connections */
+    private sseKeepaliveTimers = new Map<string, ReturnType<typeof setInterval>>();
+    /**
+     * Per-employee SSE event queue for WAN mode.
+     * When pushViaSSE fails and there is no callbackUrl fallback, events are
+     * queued here and flushed the next time the employee's SSE stream reconnects.
+     */
+    private sseEventQueue = new Map<string, Array<{ channel: string; data: any; ts: number }>>();
+    private static SSE_QUEUE_TTL_MS = 120_000; // 2-minute TTL
+    private static SSE_QUEUE_MAX = 300;        // max queued events per employee
+
+    /** Tunnel state */
+    private tunnelActive = false;
+    private tunnelUrl: string | null = null;
 
     /**
      * Pending employee sender info: msgId → employee data.
@@ -295,6 +315,20 @@ class HttpRelayService {
                 this.httpServer = null;
             }
             this.stopOfflineCheck();
+            // Close all SSE streams
+            for (const [empId, res] of this.sseClients) {
+                try { res.end(); } catch {}
+                const kt = this.sseKeepaliveTimers.get(empId);
+                if (kt) clearInterval(kt);
+            }
+            this.sseClients.clear();
+            this.sseKeepaliveTimers.clear();
+            // Stop tunnel if active
+            if (this.tunnelActive) {
+                TunnelService.stop().catch(() => {});
+                this.tunnelActive = false;
+                this.tunnelUrl = null;
+            }
             // End all active employee sessions in DB
             for (const [empId] of this.employees) {
                 try { this.runOnPinnedDb((db) => db.endEmployeeSession(empId)); } catch {}
@@ -314,8 +348,10 @@ class HttpRelayService {
     public getStatus(): {
         running: boolean;
         port: number;
-        connectedEmployees: Array<{ employee_id: string; display_name: string; avatar_url: string; ip_address: string; connected_at: number }>;
+        connectedEmployees: Array<{ employee_id: string; display_name: string; avatar_url: string; ip_address: string; connected_at: number; sseConnected: boolean }>;
         localIPs: string[];
+        tunnelActive: boolean;
+        tunnelUrl: string | null;
     } {
         const employees = Array.from(this.employees.values()).map(e => ({
             employee_id: e.employee_id,
@@ -323,21 +359,32 @@ class HttpRelayService {
             avatar_url: e.avatar_url,
             ip_address: e.ip_address,
             connected_at: e.connected_at,
+            sseConnected: this.sseClients.has(e.employee_id),
         }));
         return {
             running: this.running,
             port: this.port,
             connectedEmployees: employees,
             localIPs: this.getLocalIPs(),
+            tunnelActive: this.tunnelActive,
+            tunnelUrl: this.tunnelUrl,
         };
     }
 
     public kickEmployee(employeeId: string): void {
         const emp = this.employees.get(employeeId);
         if (emp) {
-            // Notify employee they've been kicked
-            this.pushToEmployee(emp, 'relay:kicked', { reason: 'Bị ngắt kết nối bởi quản lý' }).catch(() => {});
+            // Notify employee they've been kicked (via SSE first, then callbackUrl)
+            if (!this.pushViaSSE(employeeId, 'relay:kicked', { reason: 'Bị ngắt kết nối bởi quản lý' })) {
+                this.pushToEmployee(emp, 'relay:kicked', { reason: 'Bị ngắt kết nối bởi quản lý' }).catch(() => {});
+            }
+            // Close SSE stream
+            const sseRes = this.sseClients.get(employeeId);
+            if (sseRes) { try { sseRes.end(); } catch {} this.sseClients.delete(employeeId); }
+            const kt = this.sseKeepaliveTimers.get(employeeId);
+            if (kt) { clearInterval(kt); this.sseKeepaliveTimers.delete(employeeId); }
             this.employees.delete(employeeId);
+            this.sseEventQueue.delete(employeeId); // clear any pending queue
             // End session in DB for online time tracking
             try { this.runOnPinnedDb((db) => db.endEmployeeSession(employeeId)); } catch {}
             Logger.log(`[HttpRelayService] Kicked employee: ${emp.display_name}`);
@@ -396,6 +443,11 @@ class HttpRelayService {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ status: 'ok', relay: this.running, port: this.port }));
             return;
+        }
+
+        // ── SSE event stream ──────────────────────────────────────────
+        if (req.method === 'GET' && url === '/api/events/stream') {
+            return this.handleSSEStream(req, res);
         }
 
         res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -654,8 +706,14 @@ class HttpRelayService {
                         };
                         // Push to all connected employees
                         for (const emp of this.employees.values()) {
-                            if (!emp.callbackUrl) continue;
-                            this.pushToEmployee(emp, 'relay:messageSentByEmployee', senderPayload).catch(() => {});
+                            if (!this.pushViaSSE(emp.employee_id, 'relay:messageSentByEmployee', senderPayload)) {
+                                if (emp.callbackUrl) {
+                                    this.pushToEmployee(emp, 'relay:messageSentByEmployee', senderPayload).catch(() => {});
+                                } else {
+                                    // WAN mode — queue for delivery on reconnect
+                                    this.queueSseEvent(emp.employee_id, 'relay:messageSentByEmployee', senderPayload);
+                                }
+                            }
                         }
                         // Also emit to local renderer (boss side)
                         Logger.log(`[HttpRelayService] 📡 Emitting relay:messageSentByEmployee to boss renderer: msgId="${msgId}", empId="${employee.employee_id}", threadId="${threadId}"`);
@@ -707,6 +765,8 @@ class HttpRelayService {
             }
 
             employee.lastSeen = Date.now();
+            // Give a 5-minute window for large payload export + tunnel transfer
+            employee.syncingUntil = Date.now() + 5 * 60_000;
 
             Logger.log(`[HttpRelayService] Full sync requested by ${employee.display_name}`);
             const payload = this.runOnPinnedDb(() =>
@@ -715,6 +775,10 @@ class HttpRelayService {
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, payload, syncTs: payload.syncTs }));
+
+            // Reset timestamps after data is queued to OS buffer
+            employee.lastSeen = Date.now();
+            employee.syncingUntil = undefined;
         } catch (err: any) {
             Logger.error(`[HttpRelayService] Full sync error: ${err.message}`);
             this.json(res, 500, { success: false, error: err.message });
@@ -785,6 +849,168 @@ class HttpRelayService {
         });
     }
 
+    // ─── SSE stream handler ───────────────────────────────────────────
+
+    private handleSSEStream(req: http.IncomingMessage, res: http.ServerResponse): void {
+        const employee = this.authenticateRequest(req);
+        if (!employee) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized' }));
+            return;
+        }
+
+        employee.lastSeen = Date.now();
+        employee.consecutiveFailures = 0;
+
+        // SSE headers
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+            'Access-Control-Allow-Origin': '*',
+        });
+
+        // Send initial ping so client knows it's connected
+        res.write(': connected\n\n');
+
+        // Replace any previous SSE stream for this employee
+        const old = this.sseClients.get(employee.employee_id);
+        if (old && old !== res) {
+            try { old.end(); } catch {}
+            const oldKt = this.sseKeepaliveTimers.get(employee.employee_id);
+            if (oldKt) clearInterval(oldKt);
+        }
+        this.sseClients.set(employee.employee_id, res);
+
+        // ── Flush any events queued while SSE was disconnected ──
+        const queued = this.sseEventQueue.get(employee.employee_id) || [];
+        if (queued.length > 0) {
+            this.sseEventQueue.delete(employee.employee_id);
+            const now = Date.now();
+            let flushed = 0;
+            for (const ev of queued) {
+                if (now - ev.ts >= HttpRelayService.SSE_QUEUE_TTL_MS) continue; // expired
+                try {
+                    res.write(`data: ${JSON.stringify({ channel: ev.channel, data: ev.data })}\n\n`);
+                    flushed++;
+                } catch {
+                    // SSE already broken again — stop flushing
+                    break;
+                }
+            }
+            if (flushed > 0) {
+                Logger.log(`[HttpRelayService] 📬 Flushed ${flushed}/${queued.length} queued SSE events to ${employee.display_name}`);
+            }
+        }
+
+        // Keepalive ping every 25s to prevent proxy/tunnel timeout
+        const keepalive = setInterval(() => {
+            try { res.write(': ping\n\n'); } catch {
+                clearInterval(keepalive);
+                if (this.sseClients.get(employee.employee_id) === res) {
+                    this.sseClients.delete(employee.employee_id);
+                    this.sseKeepaliveTimers.delete(employee.employee_id);
+                }
+            }
+        }, 25_000);
+        this.sseKeepaliveTimers.set(employee.employee_id, keepalive);
+
+        Logger.log(`[HttpRelayService] 📡 SSE stream opened for ${employee.display_name}`);
+
+        // Push initial snapshot via SSE
+        try {
+            const snapshot = this.buildEmployeeSnapshot(employee.employee_id);
+            if (snapshot) {
+                res.write(`data: ${JSON.stringify({ channel: 'relay:initialState', data: snapshot })}\n\n`);
+            }
+        } catch {}
+
+        req.on('close', () => {
+            clearInterval(keepalive);
+            if (this.sseClients.get(employee.employee_id) === res) {
+                this.sseClients.delete(employee.employee_id);
+                this.sseKeepaliveTimers.delete(employee.employee_id);
+            }
+            Logger.log(`[HttpRelayService] 📡 SSE stream closed for ${employee.display_name}`);
+        });
+    }
+
+    /** Push an event via SSE to an employee. Returns true if SSE was available. */
+    private pushViaSSE(employeeId: string, channel: string, data: any): boolean {
+        const res = this.sseClients.get(employeeId);
+        if (!res) return false;
+        try {
+            res.write(`data: ${JSON.stringify({ channel, data })}\n\n`);
+            return true;
+        } catch {
+            this.sseClients.delete(employeeId);
+            const kt = this.sseKeepaliveTimers.get(employeeId);
+            if (kt) { clearInterval(kt); this.sseKeepaliveTimers.delete(employeeId); }
+            return false;
+        }
+    }
+
+    /**
+     * Queue an event for an employee when SSE is temporarily unavailable.
+     * Events are flushed when the employee's SSE stream reconnects.
+     */
+    private queueSseEvent(employeeId: string, channel: string, data: any): void {
+        // Only queue if the employee is still registered
+        if (!this.employees.has(employeeId)) return;
+        let queue = this.sseEventQueue.get(employeeId) || [];
+        const now = Date.now();
+        // Expire stale entries first
+        queue = queue.filter(e => now - e.ts < HttpRelayService.SSE_QUEUE_TTL_MS);
+        // Cap queue size — drop oldest if full
+        if (queue.length >= HttpRelayService.SSE_QUEUE_MAX) queue.shift();
+        queue.push({ channel, data, ts: now });
+        this.sseEventQueue.set(employeeId, queue);
+        Logger.log(`[HttpRelayService] 📥 Queued SSE event for ${employeeId}: channel=${channel}, queueLen=${queue.length}`);
+    }
+
+    // ─── Tunnel management ────────────────────────────────────────────
+
+    public async startTunnel(): Promise<{ success: boolean; tunnelUrl?: string; error?: string }> {
+        if (!this.running) {
+            return { success: false, error: 'Relay server chưa được bật' };
+        }
+        try {
+            const url = await TunnelService.start(this.port);
+            this.tunnelActive = true;
+            this.tunnelUrl = url;
+            Logger.log(`[HttpRelayService] 🌐 Tunnel active: ${url}`);
+
+            // Listen for URL changes (localtunnel reconnects)
+            TunnelService.onChange((newUrl) => {
+                this.tunnelUrl = newUrl;
+                this.tunnelActive = !!newUrl;
+                EventBroadcaster.emit('relay:tunnelStatusUpdate', {
+                    active: this.tunnelActive,
+                    tunnelUrl: this.tunnelUrl,
+                });
+            });
+
+            EventBroadcaster.emit('relay:tunnelStatusUpdate', { active: true, tunnelUrl: url });
+            return { success: true, tunnelUrl: url };
+        } catch (err: any) {
+            Logger.error(`[HttpRelayService] Tunnel start error: ${err.message}`);
+            return { success: false, error: err.message };
+        }
+    }
+
+    public async stopTunnel(): Promise<{ success: boolean }> {
+        await TunnelService.stop();
+        this.tunnelActive = false;
+        this.tunnelUrl = null;
+        EventBroadcaster.emit('relay:tunnelStatusUpdate', { active: false, tunnelUrl: null });
+        return { success: true };
+    }
+
+    public getTunnelStatus(): { active: boolean; tunnelUrl: string | null } {
+        return { active: this.tunnelActive, tunnelUrl: this.tunnelUrl };
+    }
+
     // ─── Event relay (push to employees) ──────────────────────────────
 
     /**
@@ -817,12 +1043,17 @@ class HttpRelayService {
         // Each employee saves to their own DB if online.
         // If offline, they sync later from boss via full/delta sync.
         for (const emp of this.employees.values()) {
-            if (!emp.callbackUrl) continue;
             if (!this.shouldRelayErpEventToEmployee(channel, data, emp.employee_id)) continue;
 
-
-            // Fire-and-forget push
-            this.pushToEmployee(emp, channel, data).catch(() => {});
+            // Prefer SSE (works over tunnel/WAN); fall back to callbackUrl push (LAN only)
+            if (!this.pushViaSSE(emp.employee_id, channel, data)) {
+                if (emp.callbackUrl) {
+                    this.pushToEmployee(emp, channel, data).catch(() => {});
+                } else {
+                    // WAN/SSE mode: no callbackUrl fallback — queue for delivery on reconnect
+                    this.queueSseEvent(emp.employee_id, channel, data);
+                }
+            }
         }
     }
 
@@ -918,6 +1149,19 @@ class HttpRelayService {
         this.offlineCheckTimer = setInterval(() => {
             const now = Date.now();
             for (const [empId, emp] of this.employees) {
+                // ── SSE connection is a live heartbeat — employee is definitely online ──
+                // Refresh lastSeen so the employee doesn't get kicked when SSE eventually drops.
+                if (this.sseClients.has(empId)) {
+                    emp.lastSeen = now;
+                    continue;
+                }
+
+                // ── Active heavy sync in progress — extend grace period ──
+                if (emp.syncingUntil && now < emp.syncingUntil) {
+                    emp.lastSeen = now;
+                    continue;
+                }
+
                 if (now - emp.lastSeen > HttpRelayService.HEARTBEAT_TIMEOUT_MS) {
                     Logger.log(`[HttpRelayService] 🔴 Employee offline (heartbeat timeout): ${emp.display_name}`);
                     this.employees.delete(empId);
@@ -1050,12 +1294,14 @@ class HttpRelayService {
         emp.assigned_accounts = newZaloIds;
 
         const snapshot = this.buildEmployeeSnapshot(employeeId);
-        // Push update to employee
-        this.pushToEmployee(emp, 'relay:accountAccessUpdate', {
+        const payload = {
             assignedAccounts: snapshot?.assignedAccounts || newZaloIds,
             accountsData: snapshot?.accountsData || [],
             permissions: snapshot?.permissions || [],
-        }).catch(() => {});
+        };
+        if (!this.pushViaSSE(employeeId, 'relay:accountAccessUpdate', payload)) {
+            this.pushToEmployee(emp, 'relay:accountAccessUpdate', payload).catch(() => {});
+        }
     }
 
     /** Push a fresh employee snapshot to the employee */
@@ -1065,7 +1311,9 @@ class HttpRelayService {
 
         const snapshot = this.buildEmployeeSnapshot(employeeId);
         if (snapshot) {
-            this.pushToEmployee(emp, 'relay:initialState', snapshot).catch(() => {});
+            if (!this.pushViaSSE(employeeId, 'relay:initialState', snapshot)) {
+                this.pushToEmployee(emp, 'relay:initialState', snapshot).catch(() => {});
+            }
         }
         Logger.log(`[HttpRelayService] refreshEmployeeState(${reason}) → employee=${employeeId}`);
     }

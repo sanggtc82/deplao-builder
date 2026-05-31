@@ -1,18 +1,18 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useAppStore } from '@/store/appStore';
-import { useUpdateStore, UpdateInfo, ProgressInfo, UpdateError } from '@/store/updateStore';
+import { useUpdateStore, UpdateInfo, ProgressInfo, UpdateError, POSTPONE_MS, POSTPONE_OPTIONS } from '@/store/updateStore';
 
 const AUTO_RESTART_SECS = 120;   // đếm ngược 2 phút trước khi tự restart
-const POSTPONE_MS = 60 * 60 * 1000;  // hoãn 1 giờ
 const DOWNLOAD_STALL_TIMEOUT_MS = 45_000; // 45s không progress → coi như treo (macOS)
 
 export function UpdateNotification() {
   const {
-    status, updateInfo, progress, error, dismissed, platform,
-    setStatus, setUpdateInfo, setProgress, setError, setDismissed,
+    status, updateInfo, progress, error, dismissed, postponedUntil, platform,
+    setStatus, setUpdateInfo, setProgress, setError, setDismissed, setPostponedUntil, postpone,
   } = useUpdateStore();
 
   const [countdown, setCountdown] = useState(AUTO_RESTART_SECS);
+  const [postponeOpen, setPostponeOpen] = useState(false);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const postponeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -36,18 +36,30 @@ export function UpdateNotification() {
     }, 1000);
   }, []);
 
-  // Hoãn: ẩn popup, sau 1 giờ hiện lại
-  const handlePostpone = useCallback(() => {
-    if (countdownRef.current) {
-      clearInterval(countdownRef.current);
-      countdownRef.current = null;
+  // Hoãn với duration tuỳ chọn
+  const handlePostpone = useCallback((ms: number = POSTPONE_MS) => {
+    if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
+    setPostponeOpen(false);
+    postpone(ms);
+  }, [postpone]);
+
+  // Watch postponedUntil — khi nó được set, đặt timer để re-show sau đúng thời điểm
+  useEffect(() => {
+    if (!postponedUntil) return;
+    if (postponeTimerRef.current) clearTimeout(postponeTimerRef.current);
+    const remaining = postponedUntil - Date.now();
+    if (remaining <= 0) {
+      setDismissed(false);
+      setPostponedUntil(null);
+      return;
     }
-    setDismissed(true);
     postponeTimerRef.current = setTimeout(() => {
       setDismissed(false);
-      if (status === 'downloaded') startCountdown();
-    }, POSTPONE_MS);
-  }, [startCountdown, setDismissed, status]);
+      setPostponedUntil(null);
+      if (useUpdateStore.getState().status === 'downloaded') startCountdown();
+    }, remaining);
+    return () => { if (postponeTimerRef.current) clearTimeout(postponeTimerRef.current); };
+  }, [postponedUntil, setDismissed, setPostponedUntil, startCountdown]);
 
   // Retry download thủ công
   const handleRetryDownload = useCallback(() => {
@@ -108,7 +120,6 @@ export function UpdateNotification() {
       offDownloaded?.();
       offError?.();
       if (countdownRef.current) clearInterval(countdownRef.current);
-      if (postponeTimerRef.current) clearTimeout(postponeTimerRef.current);
       if (stallTimerRef.current) clearTimeout(stallTimerRef.current);
     };
   }, [startCountdown, resetStallTimer, setStatus, setUpdateInfo, setProgress, setError, setDismissed]);
@@ -140,19 +151,34 @@ export function UpdateNotification() {
           <p className="font-bold text-sm">🆕 Bản cập nhật mới</p>
           <p className={`text-xs ${isLight ? 'text-gray-500' : 'text-blue-100'}`}>Phiên bản {updateInfo.version}</p>
         </div>
-        {/* Nút tắt popup */}
+        {/* Nút hoãn có dropdown — ẩn khi đã tải xong (dùng nút riêng bên dưới) */}
         {status !== 'downloaded' && (
-          <button
-            onClick={handlePostpone}
-            className={`flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full transition-colors ${
-              isLight ? 'text-gray-400 hover:text-gray-600 hover:bg-gray-100' : 'text-blue-200 hover:text-white hover:bg-white/10'
-            }`}
-            title="Hoãn 1 giờ"
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
-              <line x1="0" y1="0" x2="10" y2="10" /><line x1="10" y1="0" x2="0" y2="10" />
-            </svg>
-          </button>
+          <div className="relative flex-shrink-0">
+            <button
+              onClick={() => setPostponeOpen(v => !v)}
+              className={`w-6 h-6 flex items-center justify-center rounded-full transition-colors text-xs ${
+                isLight ? 'text-gray-400 hover:text-gray-600 hover:bg-gray-100' : 'text-blue-200 hover:text-white hover:bg-white/10'
+              }`}
+              title="Hoãn"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
+                <line x1="0" y1="0" x2="10" y2="10" /><line x1="10" y1="0" x2="0" y2="10" />
+              </svg>
+            </button>
+            {postponeOpen && (
+              <div className="absolute right-0 top-full mt-1 w-28 bg-gray-900 border border-gray-600 rounded-lg shadow-xl z-50 overflow-hidden">
+                {POSTPONE_OPTIONS.map(opt => (
+                  <button
+                    key={opt.ms}
+                    onClick={() => handlePostpone(opt.ms)}
+                    className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-blue-600 transition-colors"
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -249,14 +275,30 @@ export function UpdateNotification() {
           >
             Khởi động lại ngay
           </button>
-          <button
-            onClick={handlePostpone}
-            className={`w-full text-xs text-center transition-colors ${
-              isLight ? 'text-gray-400 hover:text-gray-600' : 'text-blue-200 hover:text-white'
-            }`}
-          >
-            ⏰ Hoãn 1 giờ
-          </button>
+          {/* Hoãn với dropdown chọn thời gian */}
+          <div className="relative">
+            <button
+              onClick={() => setPostponeOpen(v => !v)}
+              className={`w-full text-xs text-center transition-colors ${
+                isLight ? 'text-gray-400 hover:text-gray-600' : 'text-blue-200 hover:text-white'
+              }`}
+            >
+              ⏰ Hoãn…
+            </button>
+            {postponeOpen && (
+              <div className="absolute bottom-full mb-1 left-0 right-0 bg-gray-900 border border-gray-600 rounded-lg shadow-xl z-50 overflow-hidden">
+                {POSTPONE_OPTIONS.map(opt => (
+                  <button
+                    key={opt.ms}
+                    onClick={() => handlePostpone(opt.ms)}
+                    className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-blue-600 transition-colors"
+                  >
+                    ⏰ Hoãn {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

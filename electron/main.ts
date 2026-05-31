@@ -17,6 +17,7 @@ import { registerRelayIpc } from './ipc/relayIpc';
 import { registerSyncIpc } from './ipc/syncIpc';
 import { registerWorkspaceIpc } from './ipc/workspaceIpc';
 import { registerFacebookIpc, reconnectAllFBAccounts } from './ipc/facebookIpc';
+import { registerProxyIpc } from './ipc/proxyIpc';
 import { registerErpTaskIpc } from './ipc/erpTaskIpc';
 import { registerErpCalendarIpc } from './ipc/erpCalendarIpc';
 import { registerErpNoteIpc } from './ipc/erpNoteIpc';
@@ -34,10 +35,10 @@ import { SHOW_DEV_TOOLS, IS_DEV_BUILD } from '../src/configs/BuildConfig';
 const isDev = IS_DEV_BUILD;
 let isQuitting = false;
 
-// ─── Disable GPU process to save ~200-400MB RAM ────────────────────────────────
-// Electron spawns a separate GPU process for hardware acceleration.
-// For a chat/CRM app, software rendering is sufficient and saves significant RAM.
-app.disableHardwareAcceleration();
+// ─── Hardware acceleration ────────────────────────────────────────────────────
+// Giữ GPU acceleration BẬT: tắt hardware acceleration khiến CPU render toàn bộ UI,
+// dẫn đến renderer unresponsive → màn hình đen sau khi dùng một lúc.
+// app.disableHardwareAcceleration(); // ← ĐÃ XÓA: gây freeze/màn đen
 
 // ─── Cached icons ──────────────────────────────────────────────────────────────
 let cachedNormalIcon: Electron.NativeImage | null = null;
@@ -597,6 +598,7 @@ app.whenReady().then(async () => {
   registerSyncIpc();
   registerWorkspaceIpc(mainWindow);
   registerFacebookIpc();
+  registerProxyIpc();
   registerErpTaskIpc();
   registerErpCalendarIpc();
   registerErpNoteIpc();

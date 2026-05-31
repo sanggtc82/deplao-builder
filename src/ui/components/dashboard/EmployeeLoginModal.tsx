@@ -3,6 +3,15 @@ import ipc from '@/lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import { useWorkspaceStore } from '@/store/workspaceStore';
 
+/** Build normalized Boss URL — handles both IP:Port and full tunnel URL */
+function buildBossUrl(address: string, port: string): string {
+    if (!address) return '';
+    if (address.startsWith('http://') || address.startsWith('https://')) {
+        return address.replace(/\/+$/, '');
+    }
+    return `http://${address}:${port || '9900'}`;
+}
+
 interface Props {
   onClose: () => void;
 }
@@ -25,7 +34,7 @@ export default function EmployeeLoginModal({ onClose }: Props) {
     }
     setLoading(true);
     setError('');
-    const bossUrl = `http://${ip.trim()}:${port.trim() || '9900'}`;
+    const bossUrl = buildBossUrl(ip.trim(), port.trim() || '9900');
 
     try {
       // Step 1: Login to boss
@@ -122,14 +131,15 @@ export default function EmployeeLoginModal({ onClose }: Props) {
 
           <div className="flex gap-2">
             <div className="flex-1">
-              <label className="text-xs text-gray-400 font-medium mb-1 block">IP BOSS</label>
+              <label className="text-xs text-gray-400 font-medium mb-1 block">Địa chỉ BOSS</label>
               <input
                 value={ip}
                 onChange={e => setIp(e.target.value)}
-                placeholder="192.168.1.100"
+                placeholder="192.168.1.100 hoặc https://xxxx.loca.lt"
                 className="w-full text-sm bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
               />
             </div>
+            {!ip.startsWith('http') && (
             <div className="w-20">
               <label className="text-xs text-gray-400 font-medium mb-1 block">Port</label>
               <input
@@ -139,6 +149,7 @@ export default function EmployeeLoginModal({ onClose }: Props) {
                 className="w-full text-sm bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
               />
             </div>
+            )}
           </div>
 
           <div>

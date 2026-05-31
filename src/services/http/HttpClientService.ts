@@ -23,6 +23,11 @@ class HttpClientService {
     private localPort = 9901;
     private workspaceId = '';
 
+    /** SSE connection to boss (replaces local server push model) */
+    private sseReq: any = null;
+    private sseConnected = false;
+    private sseReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
     private onStatusChange: ((connected: boolean, latency: number) => void) | null = null;
     private onInitialState: ((data: any) => void) | null = null;
     private onAccountAccessUpdate: ((data: any) => void) | null = null;
@@ -98,20 +103,20 @@ class HttpClientService {
         Logger.log(`[HttpClientService] Connecting to Boss at ${this.bossUrl}...`);
 
         try {
-            // 1. Start local HTTP server to receive pushed events
-            await this.startLocalServer();
+            // 1. Verify Boss is reachable via health check
+            const health = await this.httpGet(`${this.bossUrl}/api/health`, {}, 8000).catch(() => null);
+            if (!health?.status) {
+                return { success: false, error: 'Không thể kết nối tới Boss. Kiểm tra địa chỉ và relay server đã bật chưa.' };
+            }
 
-            // 2. Register callbackUrl with Boss via heartbeat
-            // (login was already done by the UI, we have the token)
-            const callbackUrl = `http://${this.getLocalIP()}:${this.localPort}`;
+            // 2. Register with Boss via heartbeat (no callbackUrl needed in SSE mode)
             const hbResult = await this.httpPost(
                 `${this.bossUrl}/api/auth/heartbeat`,
-                { callbackUrl },
+                { callbackUrl: '' },
                 { Authorization: `Bearer ${token}` }
             );
 
             if (!hbResult.success) {
-                this.stopLocalServer();
                 return { success: false, error: hbResult.error || 'Không thể kết nối tới Boss' };
             }
 
@@ -120,7 +125,10 @@ class HttpClientService {
             this.onStatusChange?.(true, 0);
             this.startHeartbeat();
 
-            // 3. Fetch initial snapshot
+            // 3. Start SSE connection for real-time event stream (primary method)
+            this.connectSSE();
+
+            // 4. Fetch initial snapshot (SSE will also push it, but fetch as early warmup)
             try {
                 const snapshot = await this.httpGet(
                     `${this.bossUrl}/api/sync/snapshot`,
@@ -130,7 +138,7 @@ class HttpClientService {
                     this.onInitialState?.(snapshot.snapshot);
                 }
             } catch (_) {
-                // Non-critical — snapshot may come via push
+                // Non-critical — snapshot comes via SSE push
             }
 
             return { success: true };
@@ -144,6 +152,7 @@ class HttpClientService {
     public disconnect(): void {
         this.stopHeartbeat();
         this.stopLocalServer();
+        this.disconnectSSE();
         this.onStatusChange = null;
         this.onInitialState = null;
         this.onAccountAccessUpdate = null;
@@ -321,8 +330,9 @@ class HttpClientService {
         }
     }
 
-    // ─── Local HTTP Server (receive pushed events from Boss) ──────────
+    // ─── Local HTTP Server (legacy fallback — kept for backward compat) ──
 
+    /** @deprecated SSE is now used instead. Kept as fallback. */
     private startLocalServer(): Promise<void> {
         return new Promise((resolve, reject) => {
             if (this.localServer) {
@@ -447,6 +457,123 @@ class HttpClientService {
                 EventBroadcaster.sendDirect(channel, data);
             }
         }
+    }
+
+    // ─── SSE client (receive events from Boss) ──────────────────────
+
+    private connectSSE(): void {
+        if (!this.connected) return;
+        if (this.sseReq) {
+            try { this.sseReq.destroy(); } catch {}
+            this.sseReq = null;
+        }
+        if (this.sseReconnectTimer) {
+            clearTimeout(this.sseReconnectTimer);
+            this.sseReconnectTimer = null;
+        }
+
+        try {
+            const urlObj = new URL('/api/events/stream', this.bossUrl);
+            const isHttps = urlObj.protocol === 'https:';
+            const httpModule = isHttps ? require('https') : require('http');
+
+            const req = httpModule.request(
+                {
+                    hostname: urlObj.hostname,
+                    port: urlObj.port || (isHttps ? 443 : 80),
+                    path: urlObj.pathname,
+                    method: 'GET',
+                    headers: {
+                        Authorization: `Bearer ${this.token}`,
+                        Accept: 'text/event-stream',
+                        'Cache-Control': 'no-cache',
+                        ...this.getTunnelBypassHeaders(),
+                    },
+                },
+                (res: any) => {
+                    if (res.statusCode !== 200) {
+                        Logger.warn(`[HttpClientService] SSE connect failed: HTTP ${res.statusCode}, falling back to poll mode`);
+                        res.resume();
+                        this.sseConnected = false;
+                        return;
+                    }
+
+                    this.sseConnected = true;
+                    Logger.log('[HttpClientService] 📡 SSE stream connected');
+
+                    let buffer = '';
+                    let eventData = '';
+
+                    res.on('data', (chunk: Buffer) => {
+                        buffer += chunk.toString();
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || ''; // keep incomplete line
+
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                eventData += line.slice(6);
+                            } else if (line === '' && eventData) {
+                                // Empty line = end of SSE event
+                                try {
+                                    const { channel, data } = JSON.parse(eventData);
+                                    this.handlePushedEvent(channel, data);
+                                } catch { /* ignore malformed events */ }
+                                eventData = '';
+                            }
+                            // Lines starting with ':' are comments/keepalive — ignore
+                        }
+                    });
+
+                    res.on('end', () => {
+                        this.sseConnected = false;
+                        this.sseReq = null;
+                        Logger.log('[HttpClientService] SSE stream ended');
+                        if (this.connected) {
+                            // Reconnect after 3s
+                            this.sseReconnectTimer = setTimeout(() => this.connectSSE(), 3000);
+                        }
+                    });
+
+                    res.on('error', (err: Error) => {
+                        this.sseConnected = false;
+                        this.sseReq = null;
+                        Logger.warn(`[HttpClientService] SSE stream error: ${err.message}`);
+                        if (this.connected) {
+                            this.sseReconnectTimer = setTimeout(() => this.connectSSE(), 5000);
+                        }
+                    });
+                }
+            );
+
+            req.on('error', (err: Error) => {
+                this.sseConnected = false;
+                this.sseReq = null;
+                Logger.warn(`[HttpClientService] SSE request error: ${err.message}`);
+                if (this.connected) {
+                    this.sseReconnectTimer = setTimeout(() => this.connectSSE(), 5000);
+                }
+            });
+
+            req.end();
+            this.sseReq = req;
+        } catch (err: any) {
+            Logger.error(`[HttpClientService] SSE connect error: ${err.message}`);
+            if (this.connected) {
+                this.sseReconnectTimer = setTimeout(() => this.connectSSE(), 5000);
+            }
+        }
+    }
+
+    private disconnectSSE(): void {
+        if (this.sseReconnectTimer) {
+            clearTimeout(this.sseReconnectTimer);
+            this.sseReconnectTimer = null;
+        }
+        if (this.sseReq) {
+            try { this.sseReq.destroy(); } catch {}
+            this.sseReq = null;
+        }
+        this.sseConnected = false;
     }
 
     // ─── Heartbeat ────────────────────────────────────────────────────
@@ -642,10 +769,10 @@ class HttpClientService {
 
             const start = Date.now();
             try {
-                const callbackUrl = `http://${this.getLocalIP()}:${this.localPort}`;
+                // In SSE mode we don't need callbackUrl — boss pushes via SSE stream
                 const result = await this.httpPost(
                     `${this.bossUrl}/api/auth/heartbeat`,
-                    { callbackUrl },
+                    { callbackUrl: '' },
                     { Authorization: `Bearer ${this.token}` },
                     10000
                 );
@@ -672,6 +799,43 @@ class HttpClientService {
 
     // ─── HTTP helpers ─────────────────────────────────────────────────
 
+    /**
+     * Returns extra headers needed to bypass localtunnel / loca.lt interstitial pages.
+     * loca.lt shows an HTML "Visitor Pass" page for programmatic requests unless the
+     * bypass header is present.
+     */
+    private getTunnelBypassHeaders(): Record<string, string> {
+        try {
+            const hostname = new URL(this.bossUrl).hostname;
+            // loca.lt, localtunnel.me, or any custom tunnel subdomain
+            if (hostname.endsWith('.loca.lt') || hostname.endsWith('.localtunnel.me')) {
+                return { 'bypass-tunnel-reminder': 'true' };
+            }
+        } catch { /* ignore */ }
+        return {};
+    }
+
+    /**
+     * Parses a raw HTTP response body as JSON.
+     * If the body is an HTML page (e.g., loca.lt interstitial) a descriptive error is returned.
+     */
+    private parseJsonResponse(data: string): any {
+        const trimmed = data.trimStart();
+        if (trimmed.startsWith('<') || trimmed.toLowerCase().startsWith('<!doctype')) {
+            // HTML interstitial — likely a tunnel challenge page
+            Logger.warn('[HttpClientService] Received HTML response instead of JSON (tunnel interstitial?)');
+            return {
+                success: false,
+                error: 'URL tunnel cần xác nhận trình duyệt. Vui lòng mở địa chỉ Boss trong trình duyệt một lần để kích hoạt, sau đó thử lại.',
+            };
+        }
+        try {
+            return JSON.parse(data);
+        } catch {
+            return { success: false, error: 'Invalid JSON response' };
+        }
+    }
+
     private httpPost(url: string, body: any, headers: Record<string, string> = {}, timeout = 15000): Promise<any> {
         return new Promise((resolve, reject) => {
             try {
@@ -689,6 +853,7 @@ class HttpClientService {
                         headers: {
                             'Content-Type': 'application/json',
                             'Content-Length': Buffer.byteLength(payload),
+                            ...this.getTunnelBypassHeaders(),
                             ...headers,
                         },
                         timeout,
@@ -696,13 +861,7 @@ class HttpClientService {
                     (res: http.IncomingMessage) => {
                         let data = '';
                         res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-                        res.on('end', () => {
-                            try {
-                                resolve(JSON.parse(data));
-                            } catch {
-                                resolve({ success: false, error: 'Invalid JSON response' });
-                            }
-                        });
+                        res.on('end', () => resolve(this.parseJsonResponse(data)));
                     }
                 );
 
@@ -729,19 +888,16 @@ class HttpClientService {
                         port: urlObj.port,
                         path: urlObj.pathname + urlObj.search,
                         method: 'GET',
-                        headers,
+                        headers: {
+                            ...this.getTunnelBypassHeaders(),
+                            ...headers,
+                        },
                         timeout,
                     },
                     (res: http.IncomingMessage) => {
                         let data = '';
                         res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-                        res.on('end', () => {
-                            try {
-                                resolve(JSON.parse(data));
-                            } catch {
-                                resolve({ success: false, error: 'Invalid JSON response' });
-                            }
-                        });
+                        res.on('end', () => resolve(this.parseJsonResponse(data)));
                     }
                 );
 
@@ -771,6 +927,7 @@ class HttpClientService {
                         headers: {
                             'Content-Type': 'application/json',
                             'Content-Length': Buffer.byteLength(payload),
+                            ...this.getTunnelBypassHeaders(),
                             ...headers,
                         },
                         timeout,
@@ -789,9 +946,7 @@ class HttpClientService {
                         } else {
                             let data = '';
                             res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-                            res.on('end', () => {
-                                try { resolve(JSON.parse(data)); } catch { resolve({ success: false, error: 'Invalid response' }); }
-                            });
+                            res.on('end', () => resolve(this.parseJsonResponse(data)));
                         }
                     }
                 );

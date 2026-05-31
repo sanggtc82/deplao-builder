@@ -13,7 +13,7 @@
 
 > A multi-account Zalo desktop app with integrated CRM, ERP, POS, Workflow automation and AI Assistant — helping sales, customer care teams and marketing operate centrally in one single application.
 
-[![Version](https://img.shields.io/badge/version-26.4.2-22c55e)](#)
+[![Version](https://img.shields.io/badge/version-26.4.3-22c55e)](#)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-3b82f6)](#-runtime-requirements)
 [![Electron](https://img.shields.io/badge/Electron-41-47848f?logo=electron&logoColor=white)](#)
 [![React](https://img.shields.io/badge/React-18-61dafb?logo=react&logoColor=white)](#)
@@ -27,16 +27,16 @@
 ### ⬇️ Quick Download
 
 <p>
-  <a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-Setup-26.4.2.exe">
-    <img src="https://img.shields.io/badge/%F0%9F%AA%9F_Windows-Deplao--Setup--26.4.2.exe-0078d4?style=for-the-badge" alt="Download Windows" />
+  <a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-Setup-26.4.3.exe">
+    <img src="https://img.shields.io/badge/%F0%9F%AA%9F_Windows-Deplao--Setup--26.4.3.exe-0078d4?style=for-the-badge" alt="Download Windows" />
   </a>
   &nbsp;
-  <a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-26.4.2-arm64.dmg">
-    <img src="https://img.shields.io/badge/%F0%9F%8D%8E_macOS_M1%2B-Deplao--26.4.2--arm64.dmg-000000?style=for-the-badge" alt="Download macOS Apple Silicon" />
+  <a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-26.4.3-arm64.dmg">
+    <img src="https://img.shields.io/badge/%F0%9F%8D%8E_macOS_M1%2B-Deplao--26.4.3--arm64.dmg-000000?style=for-the-badge" alt="Download macOS Apple Silicon" />
   </a>
   &nbsp;
-  <a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-26.4.2.dmg">
-    <img src="https://img.shields.io/badge/%F0%9F%8D%8E_macOS_Intel-Deplao--26.4.2.dmg-000000?style=for-the-badge" alt="Download macOS Intel" />
+  <a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-26.4.3.dmg">
+    <img src="https://img.shields.io/badge/%F0%9F%8D%8E_macOS_Intel-Deplao--26.4.3.dmg-000000?style=for-the-badge" alt="Download macOS Intel" />
   </a>
 </p>
 
@@ -302,8 +302,9 @@ At a glance, Deplao is:
 - 🔗 **External integrations** — POS, shipping, payments, Google Sheets, Telegram, Discord, Email, HTTP Request — usable in chat and workflow
 - 📈 **Reports & analytics** — track messages, contacts, labels, employees, campaigns, workflows, AI usage
 - 🗂️ **Internal ERP** — tasks, calendar, notes and team operations in the same system
-- 🧑‍💼 **Boss ↔ Employee workspace** — multiple devices manage one account, granular permissions, per-employee performance tracking
-- 🔒 **Local-first data** — all data stays on the user's machine
+- 🧑‍💼 **Boss ↔ Employee workspace** — connect over **LAN or WAN** (Cloudflare Tunnel), granular permissions, per-employee performance tracking
+- 🔒 **Per-account proxy** — assign an independent HTTP/HTTPS/SOCKS5 proxy to each Zalo account before login
+- 🔐 **Local-first data** — all data stays on the user's machine
 
 ### Screenshots
 
@@ -396,6 +397,7 @@ Screens are ordered by typical usage flow: dashboard → chat → CRM → workfl
 - Merge accounts into a single unified inbox
 - Search by name, nickname, phone number
 - Quick filters: unread, unanswered, labels, conversation status
+- **Per-account proxy**: assign an independent HTTP/HTTPS/SOCKS5 proxy to each Zalo account before login — fully isolated IPs across accounts
 
 ### 2) Full-featured chat
 - Send text, images, video, files

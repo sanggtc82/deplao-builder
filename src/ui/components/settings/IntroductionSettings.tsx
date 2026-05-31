@@ -184,6 +184,25 @@ function MultiAccountPanel() {
       </Card>
 
       <Card>
+        <SectionTitle>🔒 Proxy — Chọn proxy trước khi đăng nhập</SectionTitle>
+        <div className="flex items-center gap-3 bg-blue-900/20 border border-blue-700/40 rounded-lg px-3 py-2 mb-2">
+          <span className="text-blue-400 text-sm flex-shrink-0">✨</span>
+          <p className="text-blue-300 text-xs font-medium">Mỗi tài khoản Zalo có thể dùng proxy riêng — không ảnh hưởng lẫn nhau</p>
+        </div>
+        <Paragraph>
+          Deplao hỗ trợ cấu hình proxy trước khi đăng nhập tài khoản Zalo. Hữu ích khi cần tách biệt IP cho từng tài khoản,
+          sử dụng proxy doanh nghiệp, hoặc đăng nhập tài khoản từ vùng địa lý khác.
+        </Paragraph>
+        <BulletList items={[
+          '<strong class="text-gray-200">Hỗ trợ giao thức:</strong> HTTP · HTTPS · SOCKS5',
+          '<strong class="text-gray-200">Cấu hình:</strong> Nhấn nút Proxy trên màn hình đăng nhập QR → nhập địa chỉ proxy (host:port) và thông tin xác thực nếu có',
+          '<strong class="text-gray-200">Gán theo tài khoản:</strong> Mỗi tài khoản Zalo lưu proxy riêng — đổi tài khoản là đổi proxy tự động',
+          '<strong class="text-gray-200">Kiểm tra proxy:</strong> Nhấn "Test" để xác nhận proxy hoạt động trước khi quét QR đăng nhập',
+          '<strong class="text-gray-200">Bỏ proxy:</strong> Để trống địa chỉ proxy và lưu lại — tài khoản đó sẽ kết nối trực tiếp không qua proxy',
+        ]} />
+      </Card>
+
+      <Card>
         <SectionTitle>🔀 Chế độ Gộp trang</SectionTitle>
         <div className="flex items-center gap-3 bg-blue-900/20 border border-blue-700/40 rounded-lg px-3 py-2 mb-2">
           <span className="text-blue-400 text-sm flex-shrink-0">✨</span>
@@ -1072,13 +1091,13 @@ function EmployeesPanel() {
         <SectionTitle>🏢 Mô hình hoạt động</SectionTitle>
         <Paragraph>
           Deplao hỗ trợ mô hình <strong>1 Boss — nhiều nhân viên</strong>: Boss chạy app trên máy chủ, bật Relay Server,
-          nhân viên kết nối từ máy riêng qua mạng nội bộ. Toàn bộ tin nhắn và dữ liệu đều được đồng bộ
-          tập trung về máy boss — nhân viên chỉ thao tác, không lưu dữ liệu độc lập.
+          nhân viên kết nối từ máy riêng qua <strong>mạng nội bộ (LAN)</strong> hoặc <strong>từ xa qua WAN / Cloudflare Tunnel</strong>.
+          Toàn bộ tin nhắn và dữ liệu đều được đồng bộ tập trung về máy boss — nhân viên chỉ thao tác, không lưu dữ liệu độc lập.
         </Paragraph>
         <div className="grid grid-cols-2 gap-2 mt-2">
           {[
-            { icon: '👑', label: 'Boss', desc: 'Toàn quyền, cài đặt nhân viên & tài khoản Zalo' },
-            { icon: '👷', label: 'Nhân viên', desc: 'Truy cập theo phân quyền, làm việc từ máy riêng' },
+            { icon: '👑', label: 'Boss', desc: 'Toàn quyền, cài đặt nhân viên & tài khoản Zalo, bật Relay + Tunnel' },
+            { icon: '👷', label: 'Nhân viên', desc: 'Truy cập theo phân quyền, kết nối qua LAN hoặc WAN từ bất kỳ đâu' },
           ].map((r, i) => (
             <div key={i} className="bg-gray-700/30 rounded-lg p-3 space-y-1">
               <p className="text-gray-200 text-xs font-semibold">{r.icon} {r.label}</p>
@@ -1092,20 +1111,41 @@ function EmployeesPanel() {
         <SectionTitle>🖧 Relay Server — Cầu nối Boss ↔ Nhân viên</SectionTitle>
         <Paragraph>
           Boss bật <strong>Relay Server</strong> trong <em>Cài đặt → Nhân viên → Relay Server</em>.
-          Server lắng nghe trên một cổng (mặc định 9900) và cho phép nhân viên kết nối qua địa chỉ IP + cổng đó.
+          Server lắng nghe trên một cổng (mặc định 9900). Nhân viên có thể kết nối qua <strong>LAN</strong> (cùng mạng nội bộ)
+          hoặc qua <strong>WAN / Cloudflare Tunnel</strong> (từ xa, bất kỳ đâu có Internet).
         </Paragraph>
+        <div className="grid grid-cols-2 gap-2 mt-1 mb-3">
+          {[
+            { icon: '🏠', mode: 'Chế độ LAN', desc: 'Nhân viên và boss cùng mạng Wi-Fi / văn phòng. Nhân viên nhập IP nội bộ (VD: 192.168.1.10:9900).' },
+            { icon: '🌍', mode: 'Chế độ WAN', desc: 'Boss bật Cloudflare Tunnel → nhận URL công khai (*.trycloudflare.com). Nhân viên nhập URL đó để kết nối từ xa.' },
+          ].map((m, i) => (
+            <div key={i} className="bg-gray-700/30 rounded-lg p-3 space-y-1">
+              <p className="text-gray-200 text-[11px] font-semibold">{m.icon} {m.mode}</p>
+              <p className="text-gray-500 text-[11px] leading-relaxed">{m.desc}</p>
+            </div>
+          ))}
+        </div>
         <StepList steps={[
-          { title: 'Boss bật Relay Server', desc: 'Vào Cài đặt → Nhân viên → Relay Server → nhập cổng → "Bật server". Bật "Tự động bật khi khởi động" để không phải làm thủ công mỗi lần.' },
-          { title: 'Nhân viên cài app riêng', desc: 'Nhân viên cài Deplao (phiên bản nhân viên) trên máy của họ, nhập địa chỉ IP:cổng của boss.' },
-          { title: 'Nhân viên đăng nhập', desc: 'Nhập tài khoản/mật khẩu được boss tạo sẵn. App nhân viên kết nối relay, nhận dữ liệu từ boss.' },
+          { title: 'Boss bật Relay Server', desc: 'Cài đặt → Nhân viên → Relay Server → nhập cổng → "Bật server". Bật "Tự động bật khi khởi động" để không phải làm thủ công mỗi lần.' },
+          { title: '(Tuỳ chọn) Bật Tunnel WAN', desc: 'Nhấn "Bật Tunnel WAN" — app tự cài cloudflared và tạo URL công khai dạng https://xxx.trycloudflare.com. Copy URL này gửi cho nhân viên remote.' },
+          { title: 'Nhân viên cài app', desc: 'Nhân viên cài Deplao trên máy của họ, nhập địa chỉ LAN (IP:cổng) hoặc URL WAN từ boss.' },
+          { title: 'Nhân viên đăng nhập', desc: 'Nhập tài khoản/mật khẩu được boss tạo sẵn. App kết nối relay và nhận dữ liệu từ boss.' },
           { title: 'Làm việc bình thường', desc: 'Nhân viên xem hội thoại, gửi tin nhắn được phân công — mọi thao tác đều đi qua relay về máy boss.' },
         ]} />
-        <div className="mt-3 bg-yellow-900/20 border border-yellow-700/40 rounded-lg px-3 py-2.5 space-y-1.5">
+        <div className="mt-3 bg-blue-900/20 border border-blue-700/40 rounded-lg px-3 py-2.5 space-y-1.5">
+          <p className="text-blue-300 text-[11px] font-semibold">🌐 Cloudflare Tunnel — không cần cấu hình router hay VPS</p>
+          <BulletList items={[
+            'Tunnel dùng Cloudflare Quick Tunnel miễn phí — không cần tài khoản, không giới hạn băng thông.',
+            'URL tunnel thay đổi mỗi lần bật — hãy copy URL mới và gửi lại cho nhân viên sau mỗi lần restart.',
+            'Không cần mở port router, không cần IP tĩnh, không cần VPS — phù hợp cho team làm việc từ xa.',
+          ]} />
+        </div>
+        <div className="mt-2 bg-yellow-900/20 border border-yellow-700/40 rounded-lg px-3 py-2.5 space-y-1.5">
           <p className="text-yellow-300 text-[11px] font-semibold">⚠️ Lưu ý khi restart app boss</p>
           <BulletList items={[
             '<strong class="text-gray-300">Server tự dừng</strong> khi đóng app — nhân viên bị ngắt kết nối, cần đăng nhập lại.',
-            '<strong class="text-gray-300">IP có thể thay đổi</strong> nếu DHCP cấp IP mới, đổi mạng hoặc bật/tắt VPN — nhân viên cần cập nhật địa chỉ mới.',
-            '<strong class="text-gray-300">Khuyến nghị:</strong> Đặt IP tĩnh cho máy boss để IP không bao giờ thay đổi.',
+            '<strong class="text-gray-300">IP LAN có thể thay đổi</strong> nếu DHCP cấp IP mới — khuyến nghị đặt IP tĩnh cho máy boss.',
+            '<strong class="text-gray-300">URL WAN thay đổi</strong> mỗi lần tắt/bật tunnel — copy URL mới và gửi lại cho nhân viên remote.',
           ]} />
         </div>
       </Card>

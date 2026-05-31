@@ -35,7 +35,7 @@ export default function TopBar() {
   const erpPerms = useErpPermissions();
   const erpEid = useCurrentEmployeeId();
   const { unreadCount, loadUnreadCount } = useErpNotificationStore();
-  const { todayAttendance, loadTodayAttendance, checkIn, checkOut } = useErpEmployeeStore();
+  const { loadTodayAttendance } = useErpEmployeeStore();
   const [bellOpen, setBellOpen] = useState(false);
   const bellRef = useRef<HTMLDivElement>(null);
 
