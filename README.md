@@ -13,7 +13,7 @@
 
 > Phần mềm desktop quản lý Zalo Đa tài khoản tích hợp CRM, ERP, POS, Workflow và AI Assistant giúp đội nhóm bán hàng, chăm sóc khách hàng và marketing trên Zalo vận hành tập trung trong một ứng dụng duy nhất.
 
-[![Version](https://img.shields.io/badge/version-26.4.7-22c55e)](#)
+[![Version](https://img.shields.io/badge/version-26.4.8-22c55e)](#)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-3b82f6)](#-runtime-requirements)
 [![Electron](https://img.shields.io/badge/Electron-41-47848f?logo=electron&logoColor=white)](#)
 [![React](https://img.shields.io/badge/React-18-61dafb?logo=react&logoColor=white)](#)
@@ -30,25 +30,25 @@
 <table>
 <tr>
 <td align="center" width="33%">
-<a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-Setup-26.4.7.exe">
-<img src="https://img.shields.io/badge/🪟_Windows-v26.4.7-0078d4?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows" />
+<a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-Setup-26.4.8.exe">
+<img src="https://img.shields.io/badge/🪟_Windows-v26.4.8-0078d4?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows" />
 </a>
 <br>
-<sub>Deplao-Setup-26.4.7.exe</sub>
+<sub>Deplao-Setup-26.4.8.exe</sub>
 </td>
 <td align="center" width="33%">
-<a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-26.4.7-arm64.dmg">
-<img src="https://img.shields.io/badge/🍎_macOS_M1+-v26.4.7-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS Apple Silicon" />
+<a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-26.4.8-arm64.dmg">
+<img src="https://img.shields.io/badge/🍎_macOS_M1+-v26.4.8-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS Apple Silicon" />
 </a>
 <br>
-<sub>Deplao-26.4.7-arm64.dmg</sub>
+<sub>Deplao-26.4.8-arm64.dmg</sub>
 </td>
 <td align="center" width="33%">
-<a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-26.4.7.dmg">
-<img src="https://img.shields.io/badge/🍎_macOS_Intel-v26.4.7-333333?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS Intel" />
+<a href="https://github.com/babyvibe/deplao-builder/releases/latest/download/Deplao-26.4.8.dmg">
+<img src="https://img.shields.io/badge/🍎_macOS_Intel-v26.4.8-333333?style=for-the-badge&logo=apple&logoColor=white" alt="Download macOS Intel" />
 </a>
 <br>
-<sub>Deplao-26.4.7.dmg</sub>
+<sub>Deplao-26.4.8.dmg</sub>
 </td>
 </tr>
 </table>
