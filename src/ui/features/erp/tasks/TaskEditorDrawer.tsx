@@ -398,7 +398,7 @@ export default function TaskEditorDrawer({ taskId, defaultStatus = 'todo', proje
           </div>
         ) : (
           <div className="flex-1 overflow-hidden">
-            <div className="h-full grid grid-cols-1 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.85fr)]">
+            <div className="h-full grid grid-cols-1">
               <div className="overflow-y-auto px-5 py-5 space-y-5 border-r border-gray-700/50">
                 <div>
                   <label className="text-xs text-gray-400 mb-1.5 block font-medium">Tiêu đề <span className="text-red-400">*</span></label>
@@ -561,107 +561,6 @@ export default function TaskEditorDrawer({ taskId, defaultStatus = 'todo', proje
                 </div>
               </div>
 
-              <div className="overflow-y-auto px-5 py-5 space-y-4">
-                <div className="rounded-xl border border-gray-700/60 bg-gray-900/30 p-4 space-y-3">
-                  <div className="text-[11px] uppercase tracking-wider text-gray-500">Tóm tắt nhanh</div>
-                  <div className="flex items-center flex-wrap gap-2">
-                    <StatusBadge value={form.status} />
-                    <PriorityBadge value={form.priority} />
-                  </div>
-                  <div>
-                    <div className="text-[11px] text-gray-500 mb-1.5">Preview nội dung</div>
-                    <div className="rounded-lg border border-gray-700/60 bg-gray-800/50 px-3 py-3">
-                      <RichContentPreview source={form.description} className="text-[13px]" />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[11px] text-gray-500 mb-1">Người thực hiện</div>
-                    <PeopleChips
-                      ids={form.assignees}
-                      emptyLabel="Chưa gán người thực hiện"
-                      tone="blue"
-                    />
-                  </div>
-                  <div>
-                    <div className="text-[11px] text-gray-500 mb-1">Người theo dõi</div>
-                    <PeopleChips
-                      ids={form.watchers}
-                      emptyLabel="Chưa có người theo dõi"
-                      tone="violet"
-                    />
-                  </div>
-                  {form.due_date && (
-                    <div className="rounded-lg border border-gray-700/60 bg-gray-800/60 px-3 py-2 text-xs text-gray-300">
-                      📅 Hạn hoàn thành: {new Date(form.due_date).toLocaleString('vi-VN')}
-                    </div>
-                  )}
-                </div>
-
-                {task && task.checklist?.length > 0 && (
-                  <div className="rounded-xl border border-gray-700/60 bg-gray-900/30 p-4">
-                    <p className="text-xs text-gray-400 mb-2">Checklist ({task.checklist.filter(item => item.done).length}/{task.checklist.length})</p>
-                    <div className="space-y-1.5">
-                      {task.checklist.map(item => (
-                        <label key={item.id} className="flex items-center gap-2 cursor-pointer group">
-                          <input
-                            type="checkbox"
-                            checked={!!item.done}
-                            onChange={() => handleChecklistToggle(item.id, !item.done)}
-                            className="w-3.5 h-3.5 rounded border-gray-500"
-                          />
-                          <span className={`text-xs ${item.done ? 'line-through text-gray-500' : 'text-gray-200'}`}>{item.content}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {task && (
-                  <div className="rounded-xl border border-gray-700/60 bg-gray-900/30 p-4">
-                    <p className="text-xs text-gray-400 mb-2">Bình luận ({task.comments?.length ?? 0})</p>
-                    <div className="space-y-2 mb-3 max-h-[280px] overflow-auto pr-1">
-                      {task.comments?.map(commentItem => (
-                        <div key={commentItem.id} className="bg-gray-700/50 rounded-lg p-2.5">
-                          <div className="flex items-center gap-2 mb-1">
-                            <EmployeeAvatar employeeId={commentItem.author_id} size={20} showName />
-                            <span className="text-[10px] text-gray-500 ml-auto">{new Date(commentItem.created_at).toLocaleString('vi-VN')}</span>
-                          </div>
-                          <div className="text-xs text-gray-300 pl-7 whitespace-pre-wrap break-words">{commentItem.content}</div>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <input
-                        value={comment}
-                        onChange={event => setComment(event.target.value)}
-                        onKeyDown={event => event.key === 'Enter' && handleAddComment()}
-                        placeholder="Nhập bình luận..."
-                        className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                      />
-                      <button onClick={handleAddComment} className="px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded-lg transition-colors">Gửi</button>
-                    </div>
-                  </div>
-                )}
-
-                {task?.activity?.length ? (
-                  <div className="rounded-xl border border-gray-700/60 bg-gray-900/30 p-4">
-                    <button onClick={() => setShowActivity(current => !current)} className="text-xs text-gray-400 hover:text-gray-200 mb-2">
-                      {showActivity ? '▼ Ẩn lịch sử' : '▶ Hiện lịch sử'}
-                    </button>
-                    {showActivity && (
-                      <div className="space-y-2 max-h-[260px] overflow-auto pr-1">
-                        {task.activity.slice(0, 12).map(activity => (
-                          <div key={activity.id} className="flex items-center gap-2 text-[11px] text-gray-500">
-                            <EmployeeAvatar employeeId={activity.actor_id} size={16} />
-                            <span className="text-gray-400">{actionLabel(activity.action)}</span>
-                            <span className="text-gray-600 ml-auto">{new Date(activity.created_at).toLocaleString('vi-VN')}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
             </div>
           </div>
         )}

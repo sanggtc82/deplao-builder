@@ -66,7 +66,14 @@ export default function CampaignDetail({ campaign, zaloId, allLabels, localLabel
     await loadContacts();
   };
 
-  const existingIds = new Set(contacts.map((c: any) => c.contact_id));
+  // Build dedup set: include both contact_id and phone: prefix for phone imports
+  // This prevents duplicates when a phone number was previously added as unresolved (phone:...)
+  // and later resolved to an actual UID (or vice versa)
+  const existingIds = new Set(contacts.flatMap((c: any) => {
+    const ids: string[] = [c.contact_id];
+    if (c.phone) ids.push(`phone:${c.phone}`);
+    return ids;
+  }));
 
   const fmt = (ts: number) => ts ? new Date(ts).toLocaleString('vi-VN', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
   const progress = campaign.total_contacts > 0 ? (campaign.sent_count / campaign.total_contacts) * 100 : 0;
@@ -80,9 +87,9 @@ export default function CampaignDetail({ campaign, zaloId, allLabels, localLabel
             <h3 className="font-semibold text-white text-sm truncate">{campaign.name}</h3>
             <p className="text-xs text-gray-500 mt-0.5">
               ⏱ {campaign.delay_seconds}s delay · {campaign.total_contacts} liên hệ
-              {campaign.daily_send_limit > 0 && (
-                <> · 📊 {campaign.daily_send_limit}/ngày từ {campaign.daily_start_time}</>
-              )}
+              {campaign.daily_send_limit > 0
+                ? <> · 📊 {campaign.daily_send_limit}/ngày từ {campaign.daily_start_time}</>
+                : <> · 🕐 Chạy từ {campaign.daily_start_time}</>}
             </p>
           </div>
           <div className="flex gap-1.5 flex-shrink-0">

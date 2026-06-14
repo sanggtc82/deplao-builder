@@ -5,6 +5,7 @@
  */
 
 import { FBSessionData } from './FacebookTypes';
+import Logger from '../../utils/Logger';
 
 // ─── Base Conversion ──────────────────────────────────────────────────────────
 
@@ -181,7 +182,8 @@ export function buildPostConfig(
   url: string,
   formData: Record<string, string>,
   cookie: string,
-  host: string = 'www.facebook.com'
+  host: string = 'www.facebook.com',
+  httpsAgent?: any
 ) {
   const body = new URLSearchParams(formData).toString();
   return {
@@ -192,17 +194,19 @@ export function buildPostConfig(
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     timeout: 30000,
+    ...(httpsAgent ? { httpsAgent } : {}),
   };
 }
 
 /**
  * Build axios config cho một GET request đến Facebook
  */
-export function buildGetConfig(url: string, cookie: string, host: string = 'www.facebook.com') {
+export function buildGetConfig(url: string, cookie: string, host: string = 'www.facebook.com', httpsAgent?: any) {
   return {
     url,
     headers: buildHeaders(cookie, undefined, host),
     timeout: 30000,
+    ...(httpsAgent ? { httpsAgent } : {}),
   };
 }
 
@@ -220,5 +224,137 @@ export function sleep(ms: number): Promise<void> {
 export function rateLimitDelay(): Promise<void> {
   const ms = 300 + Math.floor(Math.random() * 500);
   return sleep(ms);
+}
+
+// ─── E2EE / JID Helpers ──────────────────────────────────────────────────────
+
+/** Default E2EE Messenger server suffix */
+const E2EE_MESSENGER_SERVER = 'msgr';
+
+/** Cookies recommended by the E2EE bridge for pairing. Only c_user + xs are truly required. */
+export const E2EE_REQUIRED_COOKIES = ['c_user', 'xs'];
+export const E2EE_OPTIONAL_COOKIES = ['datr', 'fr', 'sb'];
+
+/**
+ * Chuẩn hóa target thành JID đầy đủ cho E2EE.
+ * Hỗ trợ: fbid:123 / facebook:123 / 12345678 / 12345678@msgr
+ * Port từ Python normalize_chat_jid()
+ */
+export function normalizeChatJid(
+  target: string | number,
+  defaultServer: string = E2EE_MESSENGER_SERVER,
+): string {
+  let targetStr = String(target ?? '').trim();
+  if (!targetStr) {
+    throw new Error('Thiếu chat_jid hoặc Facebook user ID để gửi E2EE.');
+  }
+
+  // Strip "fbid:" / "facebook:" prefix
+  const lower = targetStr.toLowerCase();
+  if (lower.startsWith('fbid:') || lower.startsWith('facebook:')) {
+    targetStr = targetStr.split(':')[1]?.trim() ?? targetStr;
+  }
+
+  // Already a full JID
+  if (targetStr.includes('@')) return targetStr;
+
+  // Must be numeric Facebook ID
+  if (!/^\d+$/.test(targetStr)) {
+    throw new Error(
+      `chat_jid phải là JID đầy đủ (\`<id>@msgr\`) hoặc Facebook numeric ID. ` +
+      `Giá trị nhận được: ${JSON.stringify(targetStr)}`,
+    );
+  }
+
+  const server = (defaultServer || E2EE_MESSENGER_SERVER).trim().replace(/^@/, '');
+  return `${targetStr}@${server}`;
+}
+
+/**
+ * Tạo JID từ Facebook user ID
+ * Port từ Python chat_jid_from_user_id()
+ */
+export function chatJidFromUserId(userId: string | number): string {
+  return normalizeChatJid(userId);
+}
+
+/**
+ * Parse cookie string → trích cookies cần cho E2EE bridge.
+ * Chỉ thực sự require: c_user + xs. Các cookie còn lại (datr, fr, sb) là optional.
+ * wd, presence là ephemeral/JS-set — không bao giờ có trong saved cookie.
+ */
+export function parseE2EECookies(cookieString: string): Record<string, string> {
+  const all = parseCookieString(cookieString);
+  const required = new Set(E2EE_REQUIRED_COOKIES); // ['c_user', 'xs']
+  const optional = new Set(E2EE_OPTIONAL_COOKIES);  // ['datr', 'fr', 'sb']
+  const allE2EE = new Set([...required, ...optional]);
+  const result: Record<string, string> = {};
+  for (const [k, v] of Object.entries(all)) {
+    if (allE2EE.has(k)) result[k] = v;
+  }
+
+  // Chỉ kiểm tra 2 cookies bắt buộc
+  const missing = E2EE_REQUIRED_COOKIES.filter(k => !result[k]);
+  if (missing.length > 0) {
+    throw new Error(
+      `Thiếu cookie bắt buộc cho E2EE bridge: ${missing.join(', ')}. ` +
+      `Đảm bảo cookie chứa: c_user và xs`,
+    );
+  }
+
+  // Log optional missing cookies (không throw)
+  const optionalMissing = E2EE_OPTIONAL_COOKIES.filter(k => !result[k]);
+  if (optionalMissing.length > 0) {
+    Logger.warn(`[parseE2EECookies] Thiếu cookies optional: ${optionalMissing.join(', ')} — bridge có thể limited`);
+  }
+
+  return result;
+}
+
+/**
+ * Resolve đường dẫn đến Go bridge binary.
+ * Thứ tự: FBCHAT_E2EE_BIN env → process.resourcesPath → error
+ */
+export function resolveE2EEBinaryPath(): string {
+  // 1. Environment variable override
+  if (process.env.FBCHAT_E2EE_BIN) {
+    return process.env.FBCHAT_E2EE_BIN;
+  }
+
+  // 2. Bundled with Electron app (production)
+  const path = require('path');
+  const isWindows = process.platform === 'win32';
+  const binaryName = isWindows ? 'fbchat-bridge-e2ee.exe' : 'fbchat-bridge-e2ee';
+
+  if ((process as any).resourcesPath) {
+    const bundled = path.join((process as any).resourcesPath, binaryName);
+    if (require('fs').existsSync(bundled)) {
+      return bundled;
+    }
+  }
+
+  // 3. Development: look for it in build/ relative to project root
+  // __dirname is in src/services/facebook (raw TS) or dist-electron/src/services/facebook (compiled)
+  // Bridge is now at src/bridge-e2ee/build/
+  const candidates = [
+    // raw TS: src/services/facebook → ../../src/bridge-e2ee/build/
+    path.join(__dirname, '..', '..', 'bridge-e2ee', 'build', binaryName),
+    // compiled: dist-electron/src/services/facebook → ../../../src/bridge-e2ee/build/
+    path.join(__dirname, '..', '..', '..', '..', 'src', 'bridge-e2ee', 'build', binaryName),
+    // fallback: old locations (pre-move)
+    path.join(__dirname, '..', '..', '..', 'bridge-e2ee', 'build', binaryName),
+    path.join(__dirname, '..', '..', '..', '..', 'bridge-e2ee', 'build', binaryName),
+  ];
+  for (const candidate of candidates) {
+    if (require('fs').existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    `Không tìm thấy E2EE bridge binary (${binaryName}). ` +
+    `Đặt biến môi trường FBCHAT_E2EE_BIN hoặc build bridge từ bridge-e2ee/. ` +
+    `Xem docs: bridge-e2ee/README.md`,
+  );
 }
 

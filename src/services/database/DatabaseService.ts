@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import { app, safeStorage } from 'electron';
 import Logger from '../../utils/Logger';
 import BetterSqlite3 from 'better-sqlite3';
+import type { Account, Message, Contact, CRMNote, CRMCampaign, CRMCampaignContact, CRMSendLog, CRMCampaignStatus, CRMContactStatus } from '../../models';
 
 // better-sqlite3: native SQLite — no WASM heap, memory-mapped I/O
 let db: BetterSqlite3.Database | null = null;
@@ -38,146 +39,6 @@ function closeCachedSecondaryDb(): void {
     }
 }
 
-
-export interface Account {
-    id?: number;
-    zalo_id: string;
-    full_name: string;
-    avatar_url: string;
-    phone?: string;
-    /** 1 = tài khoản Zalo Business (trả phí), 0 = tài khoản cá nhân */
-    is_business?: number;
-    imei: string;
-    user_agent: string;
-    cookies: string;
-    is_active: number;
-    created_at: string;
-    last_seen?: string;
-    listener_active?: number; // 1 = listener running, 0 = listener dead/reconnect failed
-    channel?: string; // 'zalo' | 'facebook'
-}
-
-export interface Message {
-    id?: number;
-    msg_id: string;
-    cli_msg_id?: string;
-    owner_zalo_id: string;
-    thread_id: string;
-    thread_type: number;
-    sender_id: string;
-    content: string;
-    msg_type: string;
-    timestamp: number;
-    is_sent: number;
-    attachments?: string;
-    local_paths?: string;
-    status: string;
-    quote_data?: string;
-    handled_by_employee?: string | null;
-    channel?: string;
-}
-
-export interface Contact {
-    id?: number;
-    owner_zalo_id: string;
-    contact_id: string;
-    display_name: string;
-    /** Biệt danh do người dùng đặt — ưu tiên hiển thị hơn display_name */
-    alias?: string;
-    avatar_url: string;
-    phone?: string;
-    is_friend: number;
-    contact_type: string;
-    unread_count: number;
-    last_message?: string;
-    last_message_time?: number;
-    /** 1 = muted indefinitely, 0 = not muted (use mute_until for timed mute) */
-    is_muted?: number;
-    /** epoch ms — if >0 and >now: timed mute; if 0: use is_muted flag */
-    mute_until?: number;
-    /** 1 = moved to "Others" folder */
-    is_in_others?: number;
-    /** 0 = Nam, 1 = Nữ, null = chưa biết */
-    gender?: number | null;
-    /** Ngày sinh format DD/MM/YYYY */
-    birthday?: string | null;
-}
-
-// ─── CRM Types ────────────────────────────────────────────────────────────────
-export interface CRMNote {
-    id?: number;
-    owner_zalo_id: string;
-    contact_id: string;
-    /** 'user' hoặc 'group' — xác định loại hội thoại */
-    contact_type?: string;
-    content: string;
-    /** topicId trả về từ Zalo API createNote/editNote (chỉ có với nhóm) */
-    topic_id?: string | null;
-    created_at?: number;
-    updated_at?: number;
-}
-
-export type CRMCampaignStatus = 'draft' | 'active' | 'paused' | 'done';
-export type CRMContactStatus = 'pending' | 'sending' | 'sent' | 'failed';
-export type CRMCampaignType = 'message' | 'friend_request' | 'mixed' | 'invite_to_group';
-
-export interface CRMCampaign {
-    id?: number;
-    owner_zalo_id: string;
-    name: string;
-    template_message: string;
-    friend_request_message: string;
-    campaign_type: CRMCampaignType;
-    mixed_config?: string;
-    status: CRMCampaignStatus;
-    delay_seconds: number;
-    daily_send_limit?: number;   // 0 = không giới hạn
-    daily_start_time?: string;   // "HH:MM" format
-    created_at?: number;
-    updated_at?: number;
-    // Computed fields
-    total_contacts?: number;
-    sent_count?: number;
-    pending_count?: number;
-    failed_count?: number;
-    sent_today_count?: number;   // computed: gửi trong ngày hôm nay
-}
-
-export interface CRMCampaignContact {
-    id?: number;
-    campaign_id: number;
-    owner_zalo_id: string;
-    contact_id: string;
-    display_name?: string;
-    avatar?: string;
-    phone?: string;
-    status: CRMContactStatus;
-    sent_at?: number;
-    retry_count?: number;
-    error?: string;
-    // Joined from campaign
-    template_message?: string;
-    delay_seconds?: number;
-    campaign_type?: CRMCampaignType;
-    friend_request_message?: string;
-}
-
-export interface CRMSendLog {
-    id?: number;
-    owner_zalo_id: string;
-    contact_id: string;
-    display_name?: string;
-    phone?: string;
-    contact_type?: string;
-    campaign_id?: number;
-    message: string;
-    sent_at: number;
-    status: 'sent' | 'failed';
-    error?: string;
-    data_request?: string;
-    data_response?: string;
-    send_type?: string;
-}
 
 class DatabaseService {
     private static instance: DatabaseService;
@@ -983,6 +844,7 @@ class DatabaseService {
                 last_message_at         INTEGER,
                 unread_count            INTEGER DEFAULT 0,
                 is_muted                INTEGER DEFAULT 0,
+                is_e2ee                 INTEGER DEFAULT 0,
                 metadata                TEXT,
                 synced_at               INTEGER,
                 FOREIGN KEY (account_id) REFERENCES fb_accounts(id)
@@ -1438,6 +1300,13 @@ class DatabaseService {
                 db!.exec(`ALTER TABLE messages ADD COLUMN deleted_by TEXT DEFAULT NULL`);
                 this.save();
                 Logger.log('[DatabaseService] Migration: added deleted_by column');
+            }
+
+            const hasReplyToId = cols.some((c: any) => c.name === 'reply_to_id');
+            if (!hasReplyToId) {
+                db!.exec(`ALTER TABLE messages ADD COLUMN reply_to_id TEXT DEFAULT NULL`);
+                this.save();
+                Logger.log('[DatabaseService] Migration: added reply_to_id column');
             }
 
             // Add listener_active column to accounts if missing
@@ -2281,6 +2150,30 @@ class DatabaseService {
         } catch (err: any) {
             Logger.warn(`[DatabaseService] daily_send_limit migration: ${err.message}`);
         }
+
+        // ── fb_threads.is_e2ee ──────────────────────────────────────────────
+        try {
+            const threadCols = this.query<any>(`PRAGMA table_info(fb_threads)`);
+            if (!threadCols.some((c: any) => c.name === 'is_e2ee')) {
+                db!.exec(`ALTER TABLE fb_threads ADD COLUMN is_e2ee INTEGER DEFAULT 0`);
+                this.save();
+                Logger.log('[DatabaseService] Migration: added is_e2ee to fb_threads');
+            }
+        } catch (err: any) {
+            Logger.warn(`[DatabaseService] is_e2ee migration: ${err.message}`);
+        }
+
+        // ── ai_assistants.base_url ────────────────────────────────────────────
+        try {
+            const aiCols = this.query<any>(`PRAGMA table_info(ai_assistants)`);
+            if (aiCols.length > 0 && !aiCols.some((c: any) => c.name === 'base_url')) {
+                db!.exec(`ALTER TABLE ai_assistants ADD COLUMN base_url TEXT DEFAULT NULL`);
+                this.save();
+                Logger.log('[DatabaseService] Migration: added base_url to ai_assistants');
+            }
+        } catch (err: any) {
+            Logger.warn(`[DatabaseService] base_url migration: ${err.message}`);
+        }
     }
 
     // ─── Account Operations ───────────────────────────────────────────────
@@ -2420,6 +2313,8 @@ class DatabaseService {
     }
 
     private decryptCookies(encrypted: string): string {
+        // Fast-path: empty → nothing to decrypt (e.g., Facebook accounts in unified table)
+        if (!encrypted) return encrypted;
         // Fast-path: already plain JSON (saved before encryption was added, or safeStorage was unavailable)
         const trimmed = encrypted.trimStart();
         if (trimmed.startsWith('[') || trimmed.startsWith('{')) return encrypted;
@@ -6892,21 +6787,37 @@ class DatabaseService {
         id: string; account_id: string; name: string; type: string;
         emoji?: string; participant_count: number; last_message_preview?: string;
         last_message_at?: number; unread_count: number; is_muted: number;
+        is_e2ee?: number;
     }): void {
         const now = Date.now();
         this.run(`
             INSERT INTO fb_threads (id, account_id, name, type, emoji, participant_count,
-                last_message_preview, last_message_at, unread_count, is_muted, synced_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                last_message_preview, last_message_at, unread_count, is_muted, is_e2ee, synced_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               name = excluded.name, type = excluded.type, emoji = excluded.emoji,
               participant_count = excluded.participant_count,
               last_message_preview = excluded.last_message_preview,
               last_message_at = excluded.last_message_at,
+              is_e2ee = CASE WHEN excluded.is_e2ee = 1 THEN 1 ELSE fb_threads.is_e2ee END,
               synced_at = excluded.synced_at
         `, [thread.id, thread.account_id, thread.name, thread.type, thread.emoji || null,
             thread.participant_count, thread.last_message_preview || null,
-            thread.last_message_at || null, thread.unread_count, thread.is_muted, now]);
+            thread.last_message_at || null, thread.unread_count, thread.is_muted,
+            thread.is_e2ee ?? 0, now]);
+    }
+
+    /** Đánh dấu thread là E2EE-encrypted */
+    public markFBThreadE2EE(threadId: string, accountId: string): void {
+        this.run(`UPDATE fb_threads SET is_e2ee = 1 WHERE id = ? AND account_id = ?`, [threadId, accountId]);
+    }
+
+    /** Lấy danh sách thread IDs đã mã hoá E2EE của account */
+    public getE2EEThreadIds(accountId: string): string[] {
+        const rows = this.query<{ id: string }>(
+            `SELECT id FROM fb_threads WHERE account_id = ? AND is_e2ee = 1`, [accountId]
+        );
+        return rows.map(r => r.id);
     }
 
     public saveFBThreads(accountId: string, threads: any[]): void {
@@ -6933,7 +6844,11 @@ class DatabaseService {
                 VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, 'facebook')
                 ON CONFLICT(owner_zalo_id, contact_id) DO UPDATE SET
                   display_name = CASE WHEN excluded.display_name != '' THEN excluded.display_name ELSE contacts.display_name END,
-                  avatar_url = CASE WHEN excluded.avatar_url != '' THEN excluded.avatar_url ELSE contacts.avatar_url END,
+                  avatar_url = CASE
+                    WHEN excluded.avatar_url != '' AND (contacts.avatar_url IS NULL OR contacts.avatar_url = '' OR contacts.avatar_url NOT LIKE 'media/%')
+                    THEN excluded.avatar_url
+                    ELSE contacts.avatar_url
+                  END,
                   contact_type = excluded.contact_type,
                   last_message = CASE WHEN excluded.last_message_time > COALESCE(contacts.last_message_time, 0) THEN excluded.last_message ELSE contacts.last_message END,
                   last_message_time = MAX(COALESCE(contacts.last_message_time, 0), excluded.last_message_time),
@@ -6970,7 +6885,42 @@ class DatabaseService {
         reactions?: string;
     }): void {
         const now = Date.now();
-        Logger.log(`[DB:saveFBMessage] id=${msg.id} account_id=${msg.account_id} thread_id=${msg.thread_id} sender=${msg.sender_id} is_self=${msg.is_self} body="${(msg.body || '').slice(0,50)}"`);
+        Logger.log(`[DB:saveFBMessage] id=${msg.id} account_id=${msg.account_id} thread_id=${msg.thread_id} sender=${msg.sender_id} is_self=${msg.is_self} type=${msg.type} body="${(msg.body || '').slice(0,50)}" reply_to_id=${msg.reply_to_id || '(none)'}`);
+        if (msg.type === 'sticker') {
+          Logger.log(`[DB:saveFBMessage] [STICKER] Saving sticker msg: id=${msg.id} thread_id=${msg.thread_id} attachments=${(msg.attachments || '').slice(0,200)}`);
+        }
+
+        // If this message is a reply, look up the original message content for quote_data
+        let quoteData: string | undefined;
+        if (msg.reply_to_id) {
+          try {
+            const orig = this.queryOne<any>(`SELECT body, type FROM fb_messages WHERE id = ? AND account_id = ?`, [msg.reply_to_id, msg.account_id]);
+            if (orig) {
+              quoteData = JSON.stringify({
+                msgId: msg.reply_to_id,
+                msg: orig.body || '',
+                senderId: '',
+                msgType: orig.type || 'text',
+              });
+              Logger.log(`[DB:saveFBMessage] Resolved reply_to_id=${msg.reply_to_id} → content="${(orig.body || '').slice(0,50)}"`);
+            } else {
+              Logger.log(`[DB:saveFBMessage] reply_to_id=${msg.reply_to_id} not found in fb_messages, will try unified messages table`);
+              // Fallback: try unified messages table
+              const orig2 = this.queryOne<any>(`SELECT content, msg_type FROM messages WHERE msg_id = ?`, [msg.reply_to_id]);
+              if (orig2) {
+                quoteData = JSON.stringify({
+                  msgId: msg.reply_to_id,
+                  msg: orig2.content || '',
+                  senderId: '',
+                  msgType: orig2.msg_type || 'text',
+                });
+              }
+            }
+          } catch (e: any) {
+            Logger.warn(`[DB:saveFBMessage] reply_to_id lookup error: ${e.message}`);
+          }
+        }
+
         this.run(`
             INSERT OR IGNORE INTO fb_messages
               (id, account_id, thread_id, sender_id, sender_name, body, timestamp, type,
@@ -6995,6 +6945,7 @@ class DatabaseService {
             if (msg.type === 'image' || msg.type === 'photo') return '🖼️ Hình ảnh';
             if (msg.type === 'video') return '🎬 Video';
             if (msg.type === 'audio') return '🎵 Audio';
+            if (msg.type === 'sticker') return '🎨 Sticker';
             if (msg.type !== 'text') {
                 try {
                     const atts = JSON.parse(msg.attachments || '[]');
@@ -7006,20 +6957,60 @@ class DatabaseService {
         })();
         this.run(`
             INSERT OR IGNORE INTO messages
-              (msg_id, owner_zalo_id, thread_id, thread_type, sender_id, content, msg_type, timestamp, is_sent, attachments, status, channel)
-            VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, 'facebook')
+              (msg_id, owner_zalo_id, thread_id, thread_type, sender_id, content, msg_type, timestamp, is_sent, attachments, status, channel, reply_to_id, quote_data)
+            VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, 'facebook', ?, ?)
         `, [msg.id, ownerZaloId, msg.thread_id, msg.sender_id,
             displayContent, msg.type || 'text', msg.timestamp,
-            msg.is_self, msg.attachments || '[]', msg.is_self ? 'sent' : 'received']);
+            msg.is_self, msg.attachments || '[]', msg.is_self ? 'sent' : 'received',
+            msg.reply_to_id || null, quoteData || null]);
 
-        // Update thread preview
+        // Update thread preview + contacts (unified conversation list)
         if (!msg.is_unsent) {
+            const lastMsgPreview = msg.body?.slice(0, 200) || (msg.type === 'image' ? '🖼️ Hình ảnh' : msg.type === 'video' ? '🎬 Video' : msg.type === 'audio' ? '🎵 Audio' : msg.type === 'sticker' ? '🎨 Sticker' : '[Tệp đính kèm]');
             this.run(`
                 UPDATE fb_threads SET last_message_preview = ?, last_message_at = ?,
                   unread_count = unread_count + ?
                 WHERE id = ? AND account_id = ?
-            `, [msg.body?.slice(0, 100) || (msg.type === 'image' ? '🖼️ Hình ảnh' : msg.type === 'video' ? '🎬 Video' : msg.type === 'audio' ? '🎵 Audio' : '[Tệp đính kèm]'), msg.timestamp,
+            `, [lastMsgPreview, msg.timestamp,
                 msg.is_self ? 0 : 1, msg.thread_id, msg.account_id]);
+
+            // Update unified contacts table (used by left-side conversation list)
+            // Mirror logic from FacebookService.handleIncomingMessage
+            try {
+                const fbThread = this.queryOne<any>(
+                    `SELECT name, type, metadata FROM fb_threads WHERE id = ? AND account_id = ?`,
+                    [msg.thread_id, msg.account_id]
+                );
+                let threadName = fbThread?.name || '';
+                const contactType = fbThread?.type === 'group' ? 'group' : 'user';
+
+                // For 1:1 contacts with no name (e.g. newly discovered E2EE thread),
+                // try to resolve from existing contacts table
+                if (!threadName && contactType === 'user') {
+                    const existing = this.queryOne<any>(
+                        `SELECT display_name FROM contacts WHERE contact_id = ? AND channel = 'facebook' AND display_name != '' LIMIT 1`,
+                        [msg.thread_id]
+                    );
+                    if (existing?.display_name) threadName = existing.display_name;
+                }
+                const avatarUrl = fbThread?.metadata
+                    ? (() => { try { return JSON.parse(fbThread.metadata)?.avatar_url || ''; } catch { return ''; } })()
+                    : '';
+                this.run(`
+                    INSERT INTO contacts (owner_zalo_id, contact_id, display_name, avatar_url, is_friend, contact_type, unread_count, last_message, last_message_time, channel)
+                    VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, 'facebook')
+                    ON CONFLICT(owner_zalo_id, contact_id) DO UPDATE SET
+                      display_name = CASE WHEN excluded.display_name != '' AND contacts.display_name = '' THEN excluded.display_name ELSE contacts.display_name END,
+                      avatar_url = CASE WHEN excluded.avatar_url != '' THEN excluded.avatar_url ELSE contacts.avatar_url END,
+                      last_message = excluded.last_message,
+                      last_message_time = excluded.last_message_time,
+                      unread_count = CASE WHEN ? = 0 THEN contacts.unread_count + 1 ELSE contacts.unread_count END,
+                      channel = 'facebook'
+                `, [ownerZaloId, msg.thread_id, threadName, avatarUrl, contactType,
+                    msg.is_self ? 0 : 1, lastMsgPreview, msg.timestamp, msg.is_self]);
+            } catch (err: any) {
+                Logger.warn(`[DB:saveFBMessage] contacts update error: ${err.message}`);
+            }
         }
 
         // Extract and save links from FB text messages
@@ -7056,6 +7047,7 @@ class DatabaseService {
 
     public updateFBMessageReaction(id: string, reactions: string): void {
         this.run(`UPDATE fb_messages SET reactions = ? WHERE id = ?`, [reactions, id]);
+        this.run(`UPDATE messages SET reactions = ? WHERE msg_id = ? AND channel = 'facebook'`, [reactions, id]);
     }
 
     public hasFBMessage(accountId: string, messageId: string): boolean {

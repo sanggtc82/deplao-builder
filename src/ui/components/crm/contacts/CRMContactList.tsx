@@ -519,6 +519,7 @@ export default function CRMContactList({
     alias: c.alias,
     avatar_url: c.avatar,
     phone: c.phone,
+    channel: (c as any).channel,
   }));
 
   return (

@@ -3,6 +3,7 @@ import ipc from '@/lib/ipc';
 import { useAccountStore } from '@/store/accountStore';
 import { useAppStore } from '@/store/appStore';
 import {ZaloIcon, FacebookIcon, TelegramIcon} from '../common/ChannelBadge';
+import cookieGuideImg from '../../../assets/login/hd_login_fb_cookie.png';
 
 interface AddAccountModalProps {
   onClose: () => void;
@@ -52,15 +53,11 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
 
   const handleSelectChannel = (ch: Channel) => {
     setChannel(ch);
-    if (ch === 'zalo') {
-      setStep('proxy');
-    } else {
-      setStep('detail');
-    }
+    setStep('proxy');
   };
 
   const handleBack = () => {
-    if (step === 'detail' && channel === 'zalo') setStep('proxy');
+    if (step === 'detail') setStep('proxy');
     else if (step === 'proxy') setStep('channel');
     else setStep('channel');
   };
@@ -121,7 +118,7 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
                 onClick={() => handleSelectChannel('facebook')}
                 className="flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-2 border-gray-600 hover:border-blue-400 hover:bg-blue-400/10 bg-gray-700/50 transition-all group relative"
               >
-                <span className="absolute top-2 right-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 border border-yellow-500/40">BETA</span>
+                <span className="absolute top-2 right-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/40">Mới</span>
                 <div className="w-14 h-14 rounded-full bg-[#1877F2]/20 flex items-center justify-center group-hover:bg-[#1877F2]/30 transition-colors">
                   <FacebookIcon size={32} />
                 </div>
@@ -207,7 +204,7 @@ export default function AddAccountModal({ onClose }: AddAccountModalProps) {
 
         {step === 'detail' && channel === 'facebook' && (
           <div className="p-6">
-            <FacebookLoginTab onSuccess={onClose} />
+            <FacebookLoginTab onSuccess={onClose} proxyId={selectedProxyId} />
           </div>
         )}
       </div>
@@ -589,10 +586,11 @@ function QRLoginTab({ onSuccess, proxyId }: { onSuccess: () => void; proxyId?: n
 
 // ─── Facebook Login Tab ───────────────────────────────────────────────────────
 
-function FacebookLoginTab({ onSuccess }: { onSuccess: () => void }) {
+function FacebookLoginTab({ onSuccess, proxyId }: { onSuccess: () => void; proxyId?: number | null }) {
   const [cookie, setCookie] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showGuide, setShowGuide] = useState(false);
   const { showNotification } = useAppStore();
   const { setAccounts } = useAccountStore();
 
@@ -601,7 +599,7 @@ function FacebookLoginTab({ onSuccess }: { onSuccess: () => void }) {
     setLoading(true);
     setError('');
     try {
-      const result = await ipc.fb?.addAccount({ cookie: cookie.trim() });
+      const result = await ipc.fb?.addAccount({ cookie: cookie.trim(), proxyId });
       if (result?.success) {
         showNotification('Đăng nhập Facebook thành công! 🎉 Đang hoàn tất thiết lập tài khoản...', 'success');
 
@@ -624,17 +622,6 @@ function FacebookLoginTab({ onSuccess }: { onSuccess: () => void }) {
 
   return (
     <div className="space-y-3">
-      {/* Beta notice */}
-      <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3 flex gap-2.5 items-start">
-        <span className="text-yellow-400 text-base mt-0.5">⚠️</span>
-        <div>
-          <p className="text-yellow-400 text-xs font-semibold mb-0.5">Tính năng đang trong giai đoạn Beta</p>
-          <p className="text-yellow-300/70 text-[11px] leading-relaxed">
-            Hiện chỉ đồng bộ được <strong className="text-yellow-300">tin nhắn nhóm</strong>. Tin nhắn cá nhân (1-1) bị mã hoá đầu cuối, chưa giải mã được — sẽ cập nhật trong phiên bản tới.
-          </p>
-        </div>
-      </div>
-
       <div>
         <label className="text-xs text-gray-400 mb-1 block font-medium">
           Cookie Facebook{' '}
@@ -651,8 +638,25 @@ function FacebookLoginTab({ onSuccess }: { onSuccess: () => void }) {
           autoComplete="off"
         />
         <p className="text-gray-600 text-[11px] mt-1">
-          Mở Facebook trên trình duyệt → F12 → Application → Cookies → copy tất cả
+          <button
+            type="button"
+            onClick={() => setShowGuide(true)}
+            className="text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors"
+          >
+            📖 Xem hướng dẫn lấy Cookie Facebook
+          </button>
         </p>
+      </div>
+
+      {/* Cookie expiry warning */}
+      <div className="bg-orange-500/10 border border-orange-500/30 rounded-xl p-3 flex gap-2.5 items-start">
+        <span className="text-orange-400 text-base mt-0.5">⚠️</span>
+        <div>
+          <p className="text-orange-500 text-xs font-semibold mb-0.5">Lưu ý: Cookie có thời hạn</p>
+          <p className="text-orange-400 text-[11px] leading-relaxed">
+            Cookie Facebook sẽ <strong className="text-orange-300">hết hạn nếu bạn đăng xuất</strong> khỏi Facebook trên trình duyệt hoặc sau một thời gian dài không hoạt động hoặc Facebook nghi ngờ hoạt động bất thường. Khi cookie hết hạn, tài khoản sẽ bị ngắt kết nối và bạn cần lấy cookie mới để đăng nhập lại.
+          </p>
+        </div>
       </div>
 
       {error && (
@@ -676,6 +680,82 @@ function FacebookLoginTab({ onSuccess }: { onSuccess: () => void }) {
           </span>
         ) : '💙 Đăng nhập Facebook'}
       </button>
+
+      {showGuide && <CookieGuidePopup onClose={() => setShowGuide(false)} />}
+    </div>
+  );
+}
+
+// ─── Cookie Guide Popup ──────────────────────────────────────────────────────────
+
+function CookieGuidePopup({ onClose }: { onClose: () => void }) {
+  const steps = [
+    { title: 'Mở Facebook trên trình duyệt, đăng nhập', desc: 'Dùng Chrome, Edge hoặc Cốc Cốc.' },
+    { title: 'Nhấn F12 → chọn tab Network', desc: 'Developer Tools hiện ra. Click vào tab "Network" (Mạng).' },
+    { title: 'Gõ "graphql" vào ô Filter hoặc Tìm trên danh sách request', desc: 'Nếu chưa thấy request, nhấn F5 để tải lại trang.' },
+    { title: 'Click vào request graphql → tab Headers', desc: 'Bảng chi tiết mở ra, chọn tab "Headers".' },
+    { title: 'Tìm dòng "Cookie" trong Request Headers', desc: 'Kéo xuống phần Request Headers, tìm dòng bắt đầu bằng cookie:.' },
+    { title: 'Copy toàn bộ giá trị → dán vào ô bên trái', desc: 'Bôi đen toàn bộ chuỗi dài sau "Cookie" → Copy → Dán vào app.' },
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]">
+      <div className="bg-gray-800 rounded-2xl w-full max-w-4xl mx-4 max-h-[85vh] flex flex-col shadow-2xl border border-gray-700">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <span className="text-blue-400 text-xl">🍪</span>
+            <h3 className="text-white font-semibold">Hướng dẫn lấy Cookie Facebook</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-gray-400 hover:text-white transition-colors"
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body: Left = text steps, Right = image */}
+        <div className="flex flex-1 overflow-hidden min-h-0">
+          {/* Left: scrollable step list */}
+          <div className="w-1/2 overflow-y-auto p-6 border-r border-gray-700 space-y-1">
+            {steps.map((s, i) => (
+              <div key={i} className="flex gap-3 p-3 rounded-xl hover:bg-gray-700/40 transition-colors">
+                <span className="w-7 h-7 rounded-full bg-blue-600/30 text-blue-400 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+                  {i + 1}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-white text-xs font-semibold">{s.title}</p>
+                  <p className="text-gray-500 text-[11px] mt-0.5">{s.desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Right: image */}
+          <div className="w-1/2 p-3 flex items-center justify-center">
+            <img
+              src={cookieGuideImg}
+              alt="Hướng dẫn lấy cookie Facebook"
+              className="max-w-full max-h-full object-contain rounded-lg"
+            />
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end px-6 py-4 border-t border-gray-700 shrink-0">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-5 py-2 rounded-lg text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+          >
+            ✅ Đã hiểu, dán cookie ngay!
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -227,62 +227,190 @@ export default function IntegrationDetailPage({ catalogItem, saved, webhookPort,
           </div>
         )}
 
-        {/* Webhook info for payment integrations */}
+        {/* Webhook & Tunnel — bắt buộc cho thanh toán */}
         {isPayment && (
           <div>
-            <h2 className="text-sm font-semibold text-gray-300 mb-3">🌐 Webhook URL</h2>
+            <h2 className="text-sm font-semibold text-gray-300 mb-3">🌐 Webhook Tunnel — Kết nối Internet</h2>
             <div className="bg-gray-800 rounded-xl p-4 space-y-3">
-              <p className="text-xs text-gray-400">
-                Cấu hình URL này trong trang quản trị {catalogItem.name} để nhận thông báo thanh toán tự động:
-              </p>
+
+              {/* WHY — giải thích tại sao cần tunnel */}
+              <div className="bg-amber-900/20 border border-amber-700/30 rounded-xl px-4 py-3">
+                <p className="text-xs font-semibold text-amber-300 mb-1.5">💡 Dùng {catalogItem.name} để nhận thanh toán tự động?</p>
+                <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                  {catalogItem.name} gửi webhook (thông báo giao dịch) từ internet.
+                  Nhưng phần mềm đang chạy trên máy tính của bạn (localhost), không có địa chỉ công khai.
+                  <strong className="text-amber-100"> Bạn cần bật Tunnel</strong> để tạo cầu nối giữa internet và máy bạn.
+                </p>
+              </div>
+
+              {/* Luồng hoạt động trực quan */}
+              <div className="bg-gray-900/40 rounded-xl px-4 py-3 border border-gray-700/40">
+                <p className="text-[10px] text-gray-500 font-medium mb-2">📋 Luồng hoạt động:</p>
+                <div className="flex items-center gap-2 text-[11px] text-gray-400 flex-wrap">
+                  <span className="px-2 py-1 bg-blue-900/40 rounded-lg text-blue-300">{catalogItem.name}</span>
+                  <span className="text-gray-600">─(webhook)─→</span>
+                  <span className="px-2 py-1 bg-green-900/40 rounded-lg text-green-300">Tunnel URL</span>
+                  <span className="text-gray-600">─(tunnel)─→</span>
+                  <span className="px-2 py-1 bg-purple-900/40 rounded-lg text-purple-300">Máy bạn</span>
+                  <span className="text-gray-600">→</span>
+                  <span className="px-2 py-1 bg-emerald-900/40 rounded-lg text-emerald-300">Tự động XN đơn</span>
+                </div>
+              </div>
 
               {/* Public URL (when tunnel is active) */}
               {publicWebhookUrl && (
                 <div>
-                  <p className="text-[10px] text-green-400 mb-1 font-medium">✅ URL công khai (đang hoạt động):</p>
+                  <p className="text-[10px] text-green-400 mb-1 font-medium">✅ URL công khai — dùng để cấu hình webhook trong {catalogItem.name}:</p>
                   <div className="flex items-center gap-2 bg-green-900/20 border border-green-700/40 rounded-lg px-3 py-2">
                     <code className="text-xs text-green-300 flex-1 break-all">{publicWebhookUrl}</code>
                     <button
                       className="text-gray-400 hover:text-white flex-shrink-0"
                       onClick={() => navigator.clipboard.writeText(publicWebhookUrl)}
                       title="Copy"
-                    >📋</button>
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                      </svg>
+                    </button>
                   </div>
-                  <p className="text-[10px] text-green-600 mt-1">Dùng URL này để cấu hình webhook trong {catalogItem.name}.</p>
+                  <p className="text-[10px] text-green-600 mt-1">Copy URL trên và dán vào webhook settings của {catalogItem.name}.</p>
                 </div>
               )}
 
-              {/* Local URL (always shown) */}
-              <div>
-                <p className="text-[10px] text-gray-500 mb-1">{publicWebhookUrl ? 'URL localhost (backup):' : 'URL localhost (chưa expose ra internet):'}</p>
-                <div className="flex items-center gap-2 bg-gray-700 rounded-lg px-3 py-2">
-                  <code className="text-xs text-yellow-400 flex-1 break-all">{localWebhookUrl}</code>
-                  <button
-                    className="text-gray-400 hover:text-white flex-shrink-0"
-                    onClick={() => navigator.clipboard.writeText(localWebhookUrl)}
-                    title="Copy"
-                  >📋</button>
-                </div>
-              </div>
-
-              {/* Warning when no tunnel */}
+              {/* No tunnel — Big warning + CTA */}
               {!publicWebhookUrl && (
-                <div className="bg-yellow-900/20 border border-yellow-700/40 rounded-lg px-3 py-2">
-                  <p className="text-xs text-yellow-400 font-medium mb-1">⚠️ Webhook chưa nhận được từ internet</p>
-                  <p className="text-xs text-yellow-600">
-                    URL 127.0.0.1 chỉ hoạt động nội bộ — server SePay/Casso không thể gọi vào đây.
-                    Vào trang <strong>Tích hợp</strong> → bấm nút <strong>"🔒 Offline"</strong> để mở tunnel.
-                  </p>
-                  <div className="mt-2 pt-2 border-t border-yellow-800/40">
-                    <p className="text-[10px] text-yellow-700 font-medium mb-1">Hoặc dùng thủ công:</p>
-                    <code className="text-[10px] text-gray-400 block">ngrok http {webhookPort}</code>
-                    <code className="text-[10px] text-gray-400 block">cloudflared tunnel --url http://localhost:{webhookPort}</code>
+                <div className="bg-red-900/20 border border-red-700/40 rounded-xl px-4 py-4">
+                  <div className="flex items-start gap-3">
+                    <span className="text-lg flex-shrink-0">🔴</span>
+                    <div>
+                      <p className="text-xs font-semibold text-red-300 mb-1">Chưa bật Tunnel — Chưa thể nhận thanh toán tự động</p>
+                      <p className="text-[11px] text-red-400/80 leading-relaxed">
+                        Server {catalogItem.name} cần gửi webhook đến một URL công khai trên internet.
+                        {tunnelUrl
+                          ? 'Tunnel đang chạy nhưng chưa có URL. Thử tắt rồi bật lại.'
+                          : 'Bạn cần bật Tunnel ở trang Tích hợp (nút "Bật Tunnel") để nhận webhook.'}
+                      </p>
+                      <ul className="mt-2 space-y-1 text-[11px] text-red-300/70">
+                        <li className="flex items-start gap-1.5"><span className="flex-shrink-0">1.</span> Về trang <strong className="text-red-200">Tích hợp → bật Tunnel</strong> (nút xanh trên cùng)</li>
+                        <li className="flex items-start gap-1.5"><span className="flex-shrink-0">2.</span> Copy URL công khai hiện ra</li>
+                        <li className="flex items-start gap-1.5"><span className="flex-shrink-0">3.</span> Dán URL vào webhook settings của {catalogItem.name}</li>
+                      </ul>
+                    </div>
                   </div>
                 </div>
               )}
+
+              {/* Local URL info (informational) */}
+              <div className="bg-gray-700/40 rounded-lg px-3 py-2">
+                <p className="text-[10px] text-gray-500 mb-0.5">URL local (nội bộ, không dùng để cấu hình webhook):</p>
+                <code className="text-[11px] text-gray-500 font-mono">{localWebhookUrl}</code>
+              </div>
             </div>
           </div>
         )}
+
+        {/* Usage in conversation (QuickPanel) */}
+        <div>
+          <h2 className="text-sm font-semibold text-gray-300 mb-3">💬 Sử dụng trong hội thoại</h2>
+          <div className="bg-gray-800 rounded-xl p-4 space-y-3">
+            <p className="text-xs text-gray-400 leading-relaxed">
+              Sau khi kết nối, bạn có thể tra cứu thông tin trực tiếp khi đang chat với khách hàng
+              mà không cần rời khỏi cửa sổ hội thoại:
+            </p>
+
+            <div className="bg-gray-700/50 rounded-lg p-3 border border-gray-600/30">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-lg">🔌</span>
+                <span className="text-xs font-semibold text-white">Bảng điều khiển Tích hợp nhanh</span>
+              </div>
+              <ol className="space-y-1.5 text-[11px] text-gray-400 ml-1">
+                <li className="flex items-start gap-2">
+                  <span className="text-blue-400 font-mono flex-shrink-0">1.</span>
+                  <span>Nhấn nút <span className="text-blue-300 font-medium">🔌 Tích hợp</span> trên thanh toolbar phía trên khung chat</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-blue-400 font-mono flex-shrink-0">2.</span>
+                  <span>Chọn <span className="text-white font-medium">{catalogItem.name}</span> từ danh sách tích hợp trong panel bên phải</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-blue-400 font-mono flex-shrink-0">3.</span>
+                  <span>Chọn thao tác muốn thực hiện bên dưới:</span>
+                </li>
+              </ol>
+            </div>
+
+            {/* Available quick actions for this integration type */}
+            {(catalogItem.type === 'kiotviet' || catalogItem.type === 'haravan' || catalogItem.type === 'sapo' || catalogItem.type === 'nhanh' || catalogItem.type === 'pancake') && (
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { icon: '👤', label: 'Tra cứu KH', desc: 'Theo SĐT' },
+                  { icon: '📋', label: 'Tra cứu đơn', desc: 'Theo mã/SĐT' },
+                  { icon: '🔍', label: 'Tìm sản phẩm', desc: 'Theo tên/SKU' },
+                  { icon: '✏️', label: 'Tạo đơn hàng', desc: 'Tạo đơn mới' },
+                ].map((act, i) => (
+                  <div key={i} className="flex items-center gap-2 bg-gray-700/50 rounded-lg px-3 py-2 border border-gray-600/30">
+                    <span className="text-base flex-shrink-0">{act.icon}</span>
+                    <div>
+                      <p className="text-[11px] font-medium text-gray-200">{act.label}</p>
+                      <p className="text-[10px] text-gray-500">{act.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {catalogItem.type === 'ghn' && (
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { icon: '🗺️', label: 'DS tỉnh/thành' },
+                  { icon: '🏙️', label: 'DS quận/huyện' },
+                  { icon: '📍', label: 'DS phường/xã' },
+                  { icon: '🚛', label: 'Dịch vụ GHN' },
+                  { icon: '📦', label: 'Tra vận đơn' },
+                  { icon: '💵', label: 'Tính phí ship' },
+                ].map((act, i) => (
+                  <div key={i} className="flex items-center gap-2 bg-gray-700/50 rounded-lg px-3 py-2 border border-gray-600/30">
+                    <span className="text-base flex-shrink-0">{act.icon}</span>
+                    <p className="text-[11px] font-medium text-gray-200">{act.label}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {catalogItem.type === 'ghtk' && (
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { icon: '🚚', label: 'Tra vận đơn' },
+                  { icon: '💵', label: 'Tính phí ship' },
+                ].map((act, i) => (
+                  <div key={i} className="flex items-center gap-2 bg-gray-700/50 rounded-lg px-3 py-2 border border-gray-600/30">
+                    <span className="text-base flex-shrink-0">{act.icon}</span>
+                    <p className="text-[11px] font-medium text-gray-200">{act.label}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(catalogItem.type === 'casso' || catalogItem.type === 'sepay') && (
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { icon: '💳', label: 'LS giao dịch' },
+                ].map((act, i) => (
+                  <div key={i} className="flex items-center gap-2 bg-gray-700/50 rounded-lg px-3 py-2 border border-gray-600/30">
+                    <span className="text-base flex-shrink-0">{act.icon}</span>
+                    <p className="text-[11px] font-medium text-gray-200">{act.label}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <p className="text-[11px] text-gray-500 flex items-start gap-1.5">
+              <span className="flex-shrink-0">💡</span>
+              <span>
+                Kết quả tra cứu hiển thị ngay trong panel — có thể xem chi tiết đơn hàng,
+                sản phẩm, thông tin khách hàng. Hỗ trợ <strong className="text-gray-300">ghim thao tác</strong> ra toolbar
+                để truy cập nhanh hơn.
+              </span>
+            </p>
+          </div>
+        </div>
 
         {/* Workflow hint */}
         <div className="bg-blue-900/20 border border-blue-700/40 rounded-xl p-4">

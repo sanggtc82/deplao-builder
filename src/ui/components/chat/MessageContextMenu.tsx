@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import ipc from '@/lib/ipc';
 import { toLocalMediaUrl } from '@/lib/localMedia';
+import type { ChannelCapability } from '@/../configs/channelConfig';
 
 interface MessageContextMenuProps {
   x: number;
@@ -8,6 +9,7 @@ interface MessageContextMenuProps {
   msg: any;
   isSent: boolean;
   isGroupAdmin?: boolean; // trưởng nhóm / phó nhóm được thu hồi tin nhắn của thành viên
+  channelCap?: ChannelCapability;
   onClose: () => void;
   onReply: (msg: any) => void;
   onForward: (msg: any) => void;
@@ -81,7 +83,7 @@ function getDefaultFilename(msg: any): string {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function MessageContextMenu({
-  x, y, msg, isSent, isGroupAdmin, onClose, onReply, onForward, onSelectMessages, onUndo, onDelete, onDeleteFromDb, onReact, onPin, showNotification,
+  x, y, msg, isSent, isGroupAdmin, channelCap, onClose, onReply, onForward, onSelectMessages, onUndo, onDelete, onDeleteFromDb, onReact, onPin, showNotification,
 }: MessageContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -220,19 +222,25 @@ export default function MessageContextMenu({
     <div ref={menuRef} style={style}
       className="bg-gray-800 border border-gray-600 rounded-xl shadow-2xl py-1 w-56 text-sm select-none">
       {/* Quick reactions */}
-      <div className="flex items-center justify-around px-2 py-2 border-b border-gray-700">
-        {QUICK_REACTIONS.map((emoji) => (
-          <button key={emoji}
-            onClick={() => { onReact(msg, emoji); onClose(); }}
-            className="text-xl hover:scale-125 transition-transform"
-            title={emoji}>
-            {emoji}
-          </button>
-        ))}
-      </div>
+      {(channelCap?.supportsReaction ?? true) && (
+        <div className="flex items-center justify-around px-2 py-2 border-b border-gray-700">
+          {QUICK_REACTIONS.map((emoji) => (
+            <button key={emoji}
+              onClick={() => { onReact(msg, emoji); onClose(); }}
+              className="text-xl hover:scale-125 transition-transform"
+              title={emoji}>
+              {emoji}
+            </button>
+          ))}
+        </div>
+      )}
 
-      <MenuItem icon="↩" label="Trả lời" onClick={() => { onReply(msg); onClose(); }} />
-      <MenuItem icon="↪" label="Chuyển tiếp" onClick={() => { onForward(msg); onClose(); }} />
+      {(channelCap?.supportsReply ?? true) && (
+        <MenuItem icon="↩" label="Trả lời" onClick={() => { onReply(msg); onClose(); }} />
+      )}
+      {(channelCap?.supportsForward ?? true) && (
+        <MenuItem icon="↪" label="Chuyển tiếp" onClick={() => { onForward(msg); onClose(); }} />
+      )}
       {onSelectMessages && (
         <MenuItem icon="☑" label="Chọn tin nhắn" onClick={() => { onSelectMessages(msg); onClose(); }} />
       )}
@@ -299,7 +307,7 @@ export default function MessageContextMenu({
       )}
 
       {/* Ghim tin nhắn */}
-      {onPin && (
+      {(channelCap?.supportsPin ?? true) && onPin && (
         <MenuItem
           icon={
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
@@ -316,10 +324,10 @@ export default function MessageContextMenu({
         />
       )}
 
-      {isSent && (
+      {(channelCap?.supportsUnsend ?? true) && isSent && (
         <MenuItem icon="↺" label="Thu hồi tin nhắn" onClick={() => { onUndo(msg); onClose(); }} danger />
       )}
-      {!isSent && isGroupAdmin && (
+      {(channelCap?.supportsUnsend ?? true) && !isSent && isGroupAdmin && (
         <MenuItem
           icon="↺"
           label="Xoá tin nhắn của thành viên"

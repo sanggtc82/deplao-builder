@@ -263,6 +263,29 @@ class HttpClientService {
         }
     }
 
+    // ─── Media upload (Employee → Boss) ──────────────────────────────
+
+    /**
+     * Upload a media file from Employee to Boss storage.
+     * Boss saves the file and returns its absolute path.
+     */
+    public async uploadMedia(base64: string, filename: string, zaloId?: string): Promise<{ success: boolean; bossPath?: string; error?: string }> {
+        if (!this.connected) {
+            return { success: false, error: 'Not connected' };
+        }
+
+        try {
+            return await this.httpPost(
+                `${this.bossUrl}/api/media/upload`,
+                { base64, filename, zaloId },
+                { Authorization: `Bearer ${this.token}` },
+                60000
+            );
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    }
+
     // ─── Callbacks ────────────────────────────────────────────────────
 
     public setOnStatusChange(cb: (connected: boolean, latency: number) => void): void {

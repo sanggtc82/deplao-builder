@@ -8,9 +8,7 @@ import axios from 'axios';
 import {
   FBSessionData, FBSendOptions, FBSendResult, FBReactionAction
 } from './FacebookTypes';
-import {
-  buildFormData, buildPostConfig, parseFBResponse, genThreadingId, rateLimitDelay
-} from './FacebookUtils';
+import { buildFormData, buildPostConfig, parseFBResponse, genThreadingId, rateLimitDelay } from './FacebookUtils';
 import Logger from '../../utils/Logger';
 
 const SEND_URL = 'https://www.facebook.com/messaging/send/';
@@ -39,7 +37,8 @@ export async function sendMessage(
   dataFB: FBSessionData,
   threadId: string,
   body: string,
-  opts?: FBSendOptions
+  opts?: FBSendOptions,
+  httpsAgent?: any
 ): Promise<FBSendResult> {
   await rateLimitDelay();
 
@@ -108,10 +107,11 @@ export async function sendMessage(
   }
 
   try {
-    const config = buildPostConfig(SEND_URL, form, dataFB.cookieFacebook);
+    const config = buildPostConfig(SEND_URL, form, dataFB.cookieFacebook, undefined, httpsAgent);
     const response = await axios.post(config.url, config.data, {
       headers: config.headers,
       timeout: config.timeout,
+      ...(httpsAgent ? { httpsAgent } : {}),
     });
     const result = parseFBResponse(response.data as string);
 
@@ -151,7 +151,8 @@ export async function sendMessage(
  */
 export async function unsendMessage(
   dataFB: FBSessionData,
-  messageId: string
+  messageId: string,
+  httpsAgent?: any
 ): Promise<{ success: boolean; error?: string }> {
   await rateLimitDelay();
 
@@ -184,7 +185,8 @@ export async function addReaction(
   dataFB: FBSessionData,
   messageId: string,
   emoji: string,
-  action: FBReactionAction = 'add'
+  action: FBReactionAction = 'add',
+  httpsAgent?: any
 ): Promise<{ success: boolean; error?: string }> {
   await rateLimitDelay();
 
@@ -218,12 +220,323 @@ export async function addReaction(
         'Cookie': dataFB.cookieFacebook,
       },
       timeout: 30000,
+      ...(httpsAgent ? { httpsAgent } : {}),
     });
 
     // Reaction call thường không trả lỗi rõ ràng
     return { success: true };
   } catch (err: any) {
     Logger.error(`[FacebookMessageSender] addReaction error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Chỉnh sửa nội dung tin nhắn đã gửi (I1)
+ * Sử dụng GraphQL mutation với docId.
+ */
+export async function editMessage(
+  dataFB: FBSessionData,
+  messageId: string,
+  newText: string,
+  httpsAgent?: any
+): Promise<{ success: boolean; error?: string }> {
+  await rateLimitDelay();
+
+  const form = buildFormData(dataFB, {
+    friendlyName: 'CometEditMessageMutation',
+    docId: '1774558879550305',
+  });
+
+  form['variables'] = JSON.stringify({
+    data: {
+      message_id: String(messageId),
+      text: newText,
+      client_mutation_id: '1',
+      actor_id: dataFB.FacebookID,
+    }
+  });
+  form['dpr'] = '1';
+
+  try {
+    const formBody = new URLSearchParams(form).toString();
+    const response = await axios.post(GRAPHQL_URL, formBody, {
+      headers: {
+        'Host': 'www.facebook.com',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': String(formBody.length),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Origin': 'https://www.facebook.com',
+        'Referer': 'https://www.facebook.com/',
+        'Cookie': dataFB.cookieFacebook,
+      },
+      timeout: 30000,
+      ...(httpsAgent ? { httpsAgent } : {}),
+    });
+
+    // Edit mutation typically returns success without explicit error
+    return { success: true };
+  } catch (err: any) {
+    Logger.error(`[FacebookMessageSender] editMessage error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Chuyển tiếp tin nhắn đến thread khác (I2)
+ * Sử dụng GraphQL mutation với doc_id fbchat-v2: 1870626626883803
+ */
+export async function forwardMessage(
+  dataFB: FBSessionData,
+  messageId: string,
+  targetThreadId: string,
+  isGroup: boolean = false,
+  httpsAgent?: any
+): Promise<{ success: boolean; error?: string }> {
+  await rateLimitDelay();
+
+  const form = buildFormData(dataFB, {
+    friendlyName: 'CometForwardMessageMutation',
+    docId: '1870626626883803',
+  });
+
+  form['variables'] = JSON.stringify({
+    data: {
+      message_id: String(messageId),
+      thread_id: String(targetThreadId),
+      is_group: isGroup,
+      client_mutation_id: '1',
+      actor_id: dataFB.FacebookID,
+    }
+  });
+  form['dpr'] = '1';
+
+  try {
+    const formBody = new URLSearchParams(form).toString();
+    const response = await axios.post(GRAPHQL_URL, formBody, {
+      headers: {
+        'Host': 'www.facebook.com',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': String(formBody.length),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Origin': 'https://www.facebook.com',
+        'Referer': 'https://www.facebook.com/',
+        'Cookie': dataFB.cookieFacebook,
+      },
+      timeout: 30000,
+      ...(httpsAgent ? { httpsAgent } : {}),
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    Logger.error(`[FacebookMessageSender] forwardMessage error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Ghim tin nhắn (I3)
+ * Sử dụng GraphQL mutation với doc_id fbchat-v2: 3140537590685980
+ */
+export async function pinMessage(
+  dataFB: FBSessionData,
+  messageId: string,
+  threadId: string,
+  httpsAgent?: any
+): Promise<{ success: boolean; error?: string }> {
+  await rateLimitDelay();
+
+  const form = buildFormData(dataFB, {
+    friendlyName: 'CometPinMessageMutation',
+    docId: '3140537590685980',
+  });
+
+  form['variables'] = JSON.stringify({
+    data: {
+      message_id: String(messageId),
+      thread_id: String(threadId),
+      client_mutation_id: '1',
+      actor_id: dataFB.FacebookID,
+    }
+  });
+  form['dpr'] = '1';
+
+  try {
+    const formBody = new URLSearchParams(form).toString();
+    const response = await axios.post(GRAPHQL_URL, formBody, {
+      headers: {
+        'Host': 'www.facebook.com',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': String(formBody.length),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Origin': 'https://www.facebook.com',
+        'Referer': 'https://www.facebook.com/',
+        'Cookie': dataFB.cookieFacebook,
+      },
+      timeout: 30000,
+      ...(httpsAgent ? { httpsAgent } : {}),
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    Logger.error(`[FacebookMessageSender] pinMessage error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Bỏ ghim tin nhắn (I3)
+ */
+export async function unpinMessage(
+  dataFB: FBSessionData,
+  messageId: string,
+  threadId: string,
+  httpsAgent?: any
+): Promise<{ success: boolean; error?: string }> {
+  await rateLimitDelay();
+
+  const form = buildFormData(dataFB, {
+    friendlyName: 'CometUnpinMessageMutation',
+    docId: '2508157361243159',
+  });
+
+  form['variables'] = JSON.stringify({
+    data: {
+      message_id: String(messageId),
+      thread_id: String(threadId),
+      client_mutation_id: '1',
+      actor_id: dataFB.FacebookID,
+    }
+  });
+  form['dpr'] = '1';
+
+  try {
+    const formBody = new URLSearchParams(form).toString();
+    const response = await axios.post(GRAPHQL_URL, formBody, {
+      headers: {
+        'Host': 'www.facebook.com',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': String(formBody.length),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Origin': 'https://www.facebook.com',
+        'Referer': 'https://www.facebook.com/',
+        'Cookie': dataFB.cookieFacebook,
+      },
+      timeout: 30000,
+      ...(httpsAgent ? { httpsAgent } : {}),
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    Logger.error(`[FacebookMessageSender] unpinMessage error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Tạo poll trong thread (I6)
+ */
+export async function createPoll(
+  dataFB: FBSessionData,
+  threadId: string,
+  question: string,
+  options: string[],
+  httpsAgent?: any
+): Promise<{ success: boolean; pollId?: string; error?: string }> {
+  await rateLimitDelay();
+
+  const form = buildFormData(dataFB, {
+    friendlyName: 'CometCreatePollMutation',
+    docId: '2845698772358559',
+  });
+
+  form['variables'] = JSON.stringify({
+    data: {
+      thread_id: String(threadId),
+      question: question,
+      options: options.map((opt, i) => ({ id: String(i + 1), text: opt })),
+      client_mutation_id: '1',
+      actor_id: dataFB.FacebookID,
+    }
+  });
+  form['dpr'] = '1';
+
+  try {
+    const formBody = new URLSearchParams(form).toString();
+    const response = await axios.post(GRAPHQL_URL, formBody, {
+      headers: {
+        'Host': 'www.facebook.com',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': String(formBody.length),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Origin': 'https://www.facebook.com',
+        'Referer': 'https://www.facebook.com/',
+        'Cookie': dataFB.cookieFacebook,
+      },
+      timeout: 30000,
+      ...(httpsAgent ? { httpsAgent } : {}),
+    });
+
+    const result = parseFBResponse(response.data as string);
+    const pollId = result?.data?.poll_create?.poll?.id || result?.data?.poll?.id;
+    return { success: true, pollId: pollId ? String(pollId) : undefined };
+  } catch (err: any) {
+    Logger.error(`[FacebookMessageSender] createPoll error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Bỏ phiếu trong poll (I6)
+ */
+export async function votePoll(
+  dataFB: FBSessionData,
+  pollId: string,
+  optionIds: string[],
+  httpsAgent?: any
+): Promise<{ success: boolean; error?: string }> {
+  await rateLimitDelay();
+
+  const form = buildFormData(dataFB, {
+    friendlyName: 'CometPollVoteMutation',
+    docId: '568602700180371',
+  });
+
+  form['variables'] = JSON.stringify({
+    data: {
+      poll_id: String(pollId),
+      selected_option_ids: optionIds,
+      client_mutation_id: '1',
+      actor_id: dataFB.FacebookID,
+    }
+  });
+  form['dpr'] = '1';
+
+  try {
+    const formBody = new URLSearchParams(form).toString();
+    const response = await axios.post(GRAPHQL_URL, formBody, {
+      headers: {
+        'Host': 'www.facebook.com',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': String(formBody.length),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Origin': 'https://www.facebook.com',
+        'Referer': 'https://www.facebook.com/',
+        'Cookie': dataFB.cookieFacebook,
+      },
+      timeout: 30000,
+      ...(httpsAgent ? { httpsAgent } : {}),
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    Logger.error(`[FacebookMessageSender] votePoll error: ${err.message}`);
     return { success: false, error: err.message };
   }
 }

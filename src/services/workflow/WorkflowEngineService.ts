@@ -2,6 +2,7 @@ import EventBroadcaster from '../event/EventBroadcaster';
 import DatabaseService from '../database/DatabaseService';
 import ConnectionManager from '../../utils/ConnectionManager';
 import { FacebookService } from '../facebook/FacebookService';
+import { FacebookSendService } from '../facebook/FacebookSendService';
 import Logger from '../../utils/Logger';
 import IntegrationRegistry from '../integrations/IntegrationRegistry';
 import axios from 'axios';
@@ -10,6 +11,7 @@ import * as cron from 'node-cron';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
+import { google } from 'googleapis';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,8 +45,13 @@ export type NodeType =
   | 'ghn.createOrder' | 'ghn.getTracking' | 'ghn.getProvinces' | 'ghn.getDistricts' | 'ghn.getWards' | 'ghn.getServices'
   | 'ghtk.createOrder' | 'ghtk.getTracking'
   // Facebook
-  | 'fb.trigger.message'
-  | 'fb.action.sendMessage' | 'fb.action.addReaction' | 'fb.action.sendImage';
+  | 'fb.trigger.message' | 'fb.trigger.image' | 'fb.trigger.video' | 'fb.trigger.file' | 'fb.trigger.sticker' | 'fb.trigger.reaction'
+  | 'fb.trigger.unsend' | 'fb.trigger.groupEvent'
+  | 'fb.action.sendMessage' | 'fb.action.sendTyping' | 'fb.action.addReaction'
+  | 'fb.action.markAsRead' | 'fb.action.forward' | 'fb.action.pin' | 'fb.action.unpin'
+  | 'fb.action.createPoll' | 'fb.action.block' | 'fb.action.unsend' | 'fb.action.editMessage'
+  | 'fb.action.changeName' | 'fb.action.changeEmoji' | 'fb.action.changeNickname'
+  | 'fb.action.sendImage';
 
 export type WorkflowChannel = 'zalo' | 'facebook';
 
@@ -134,6 +141,7 @@ class WorkflowEngineService {
   public async initialize(): Promise<void> {
     this.loadWorkflows();
     this.registerZaloEventListeners();
+    this.registerFacebookEventListeners();
     this.registerCronJobs();
     Logger.log(`[WorkflowEngine] Initialized — ${this.workflows.size} workflows loaded`);
   }
@@ -143,7 +151,27 @@ class WorkflowEngineService {
   }
 
   private isRunnableWorkflow(wf: Workflow): boolean {
-    return this.normalizeWorkflowChannel(wf.channel) === 'zalo';
+    const ch = this.normalizeWorkflowChannel(wf.channel);
+    return ch === 'zalo' || ch === 'facebook';
+  }
+
+  /**
+   * Resolve Facebook account ID về internal UUID để tìm đúng instance trong FacebookService.
+   * FacebookService.instances map dùng UUID làm key, nhưng workflow trigger gửi numeric FB UID.
+   * Nếu không resolve, getInstance() sẽ tạo instance mới + connect() mất ~10s không cần thiết.
+   */
+  private resolveFBAccountId(rawId: string): string {
+    if (!rawId) return '';
+    // Nếu đã là UUID (có dấu gạch ngang) → trả về nguyên
+    if (rawId.includes('-')) return rawId;
+    // Nếu là Facebook UID (all digits) → tìm UUID từ DB
+    if (/^\d+$/.test(rawId)) {
+      try {
+        const fbAcc = DatabaseService.getInstance().getFBAccountByFacebookId(rawId);
+        if (fbAcc?.id) return fbAcc.id;
+      } catch {}
+    }
+    return rawId;
   }
 
   // ─── Load ─────────────────────────────────────────────────────────────────
@@ -233,6 +261,42 @@ class WorkflowEngineService {
 
   }
 
+  /** Bridge Facebook events to workflow triggers */
+  private registerFacebookEventListeners(): void {
+    // Simple 1:1 mapping for standalone Facebook events
+    const SIMPLE_EVENTS: Record<string, string> = {
+      'fb:onReaction':   'fb.trigger.reaction',
+      'fb:onUnsend':     'fb.trigger.unsend',
+      'fb:onGroupEvent': 'fb.trigger.groupEvent',
+    };
+    for (const [channel, triggerType] of Object.entries(SIMPLE_EVENTS)) {
+      EventBroadcaster.onBeforeSend(channel, (data: any) => {
+        this.triggerWorkflows(triggerType, data);
+      });
+    }
+
+    // Message event — determine specific trigger type from attachment data
+    EventBroadcaster.onBeforeSend('fb:onMessage', (data: any) => {
+      // Always trigger the base text-message workflow
+      this.triggerWorkflows('fb.trigger.message', data);
+
+      // Route to media-specific triggers based on attachment type
+      const msg = data?.message || {};
+      const att = msg.attachments || {};
+      const attType = (att.attachmentType || '').toLowerCase();
+
+      if (attType === 'image' || attType === 'photo') {
+        this.triggerWorkflows('fb.trigger.image', data);
+      } else if (attType === 'video') {
+        this.triggerWorkflows('fb.trigger.video', data);
+      } else if (attType === 'file' || attType === 'audio') {
+        this.triggerWorkflows('fb.trigger.file', data);
+      } else if (attType === 'sticker') {
+        this.triggerWorkflows('fb.trigger.sticker', data);
+      }
+    });
+  }
+
   /**
    * Gọi từ main process khi renderer emit 'workflow:labelEvent'.
    * Bridge: renderer (ChatHeader) → ipcMain → engine.
@@ -290,12 +354,15 @@ class WorkflowEngineService {
       const triggerNode = wf.nodes.find(n => n.type === triggerType);
       if (!triggerNode) continue;
       // pageIds: rỗng = áp dụng cho tất cả; có giá trị = chỉ chạy cho page khớp
-      if (wf.pageIds.length > 0 && eventData.zaloId && !wf.pageIds.includes(eventData.zaloId)) continue;
+      if (wf.pageIds.length > 0) {
+        const accountId = eventData.zaloId || eventData.fbAccountId || '';
+        if (accountId && !wf.pageIds.includes(accountId)) continue;
+      }
       if (!this.matchesTriggerFilter(triggerNode, eventData)) continue;
 
-      // ─── Debounce for trigger.message: gom tin nhắn liên tiếp ──────────
+      // ─── Debounce for message triggers: gom tin nhắn liên tiếp ────────
       const debounceSeconds = Number(triggerNode.config.debounceSeconds || 0);
-      if (triggerType === 'trigger.message' && debounceSeconds > 0) {
+      if ((triggerType === 'trigger.message' || triggerType === 'fb.trigger.message') && debounceSeconds > 0) {
         const msg = eventData.data || eventData.message || {};
         const threadId = (msg as any).threadId || eventData.threadId || '';
         const debounceKey = `${wf.id}:${threadId}`;
@@ -460,10 +527,28 @@ class WorkflowEngineService {
 
     // ── Facebook trigger matching ───────────────────────────────────────────
     if (triggerNode.type === 'fb.trigger.message') {
-      // Filter by accountId
-      if (cfg.accountId && data.fbAccountId !== cfg.accountId) return false;
       // Filter by threadId
       if (cfg.threadId && data.threadId !== cfg.threadId) return false;
+      // Filter by threadType (DM vs Group) — Facebook group threads often have '_' in ID
+      if (cfg.threadType !== undefined && cfg.threadType !== 'all') {
+        const isGroup = !!(data.threadId && data.threadId.includes('_'));
+        if (String(cfg.threadType) === '0' && isGroup) return false;
+        if (String(cfg.threadType) === '1' && !isGroup) return false;
+      }
+      // Filter by sender (fromId)
+      if (cfg.fromId) {
+        const senderId = data.fromId || (data.message || {}).userID || '';
+        if (senderId !== cfg.fromId) return false;
+      }
+      // Filter by group (groupId)
+      if (cfg.groupId && data.threadId !== cfg.groupId) return false;
+      // Ignore own messages (default true)
+      if (cfg.ignoreOwn !== false) {
+        const msg = data.message || {};
+        if (msg.isSelf || data.isSelf) return false;
+      }
+      // Only own messages
+      if (cfg.onlyOwn && !((data.message || {}).isSelf || data.isSelf)) return false;
       // Keyword filter
       if (cfg.keyword) {
         const content = String(data.content || data.message?.body || '').toLowerCase();
@@ -474,6 +559,40 @@ class WorkflowEngineService {
         if (mode === 'equals' && !kws.includes(content)) return false;
         if (mode === 'starts_with' && !kws.some(k => content.startsWith(k))) return false;
       }
+    }
+
+    // ── Facebook media attachment triggers ────────────────────────────────
+    if (['fb.trigger.image', 'fb.trigger.video', 'fb.trigger.file', 'fb.trigger.sticker'].includes(triggerNode.type)) {
+      if (cfg.threadId && data.threadId !== cfg.threadId) return false;
+      // Also verify the message actually has the matching attachment type
+      const msg = data?.message || {};
+      const att = msg.attachments || {};
+      const attType = (att.attachmentType || '').toLowerCase();
+      const expectedType = triggerNode.type.split('.').pop(); // image | video | file | sticker
+      if (expectedType === 'file' && attType !== 'file' && attType !== 'audio') return false;
+      if (expectedType === 'image' && attType !== 'image' && attType !== 'photo') return false;
+      if (expectedType !== 'file' && expectedType !== 'image' && attType !== expectedType) return false;
+    }
+
+    // ── Facebook reaction trigger ─────────────────────────────────────────
+    if (triggerNode.type === 'fb.trigger.reaction') {
+      if (cfg.threadId && data.threadId !== cfg.threadId) return false;
+      if (cfg.reactionType && cfg.reactionType !== 'any') {
+        // FB event uses 'emoji' field; Zalo uses 'react'/'reactionType'
+        const actualEmoji = data.emoji || data.react || data.reactionType || '';
+        if (String(actualEmoji) !== String(cfg.reactionType)) return false;
+      }
+    }
+
+    // ── Facebook unsend trigger ───────────────────────────────────────────
+    if (triggerNode.type === 'fb.trigger.unsend') {
+      if (cfg.threadId && data.threadId !== cfg.threadId) return false;
+    }
+
+    // ── Facebook group event trigger ──────────────────────────────────────
+    if (triggerNode.type === 'fb.trigger.groupEvent') {
+      if (cfg.threadId && data.threadId !== cfg.threadId) return false;
+      if (cfg.eventType && cfg.eventType !== 'all' && data.type !== cfg.eventType) return false;
     }
 
     return true;
@@ -487,7 +606,7 @@ class WorkflowEngineService {
     triggeredBy: string = 'manual'
   ): Promise<WorkflowRunLog> {
     if (!this.isRunnableWorkflow(wf)) {
-      throw new Error('Workflow Facebook chưa được hỗ trợ chạy ở phiên bản hiện tại');
+      throw new Error('Workflow không hỗ trợ chạy (channel unknown)');
     }
 
     const runId = uuidv4();
@@ -517,7 +636,7 @@ class WorkflowEngineService {
       const t0 = Date.now();
 
       if (context.skippedNodes.has(nodeId)) {
-        nodeResults.push({ nodeId, nodeType: node.type, label: node.label, status: 'skipped', input: {}, output: {}, durationMs: 0 });
+        nodeResults.push({ nodeId, nodeType: node.type, label: node.label, status: 'skipped', input: {}, output: { _skipped: true }, durationMs: 0 });
         // Propagate skip to downstream nodes
         this.markDownstreamSkipped(nodeId, wf, context.skippedNodes);
         continue;
@@ -561,14 +680,30 @@ class WorkflowEngineService {
           }
         }
 
-        nodeResults.push({ nodeId, nodeType: node.type, label: node.label, status: 'success', input: renderedConfig, output, durationMs: Date.now() - t0 });
+        nodeResults.push({ nodeId, nodeType: node.type, label: node.label, status: 'success', input: this.truncateData(renderedConfig), output: this.truncateData(output), durationMs: Date.now() - t0 });
       } catch (err: any) {
         // logic.stopIf signals a graceful stop — treat as success, halt loop
         if (err.message === '__STOP__') {
-          nodeResults.push({ nodeId, nodeType: node.type, label: node.label, status: 'success', input: renderedConfig, output: { stopped: true }, durationMs: Date.now() - t0 });
+          nodeResults.push({ nodeId, nodeType: node.type, label: node.label, status: 'success', input: this.truncateData(renderedConfig), output: { stopped: true }, durationMs: Date.now() - t0 });
           break;
         }
-        nodeResults.push({ nodeId, nodeType: node.type, label: node.label, status: 'error', input: {}, output: {}, durationMs: Date.now() - t0, error: err.message });
+        // Build rich error output from axios/HTTP errors
+        const errorOutput: Record<string, any> = {};
+        errorOutput._errorType = 'execution_error';
+        if (err.response) {
+          errorOutput._errorType = 'http_error';
+          errorOutput._httpStatus = err.response.status;
+          errorOutput._httpStatusText = err.response.statusText;
+          errorOutput._responseData = this.truncateData(err.response.data);
+          errorOutput._responseHeaders = err.response.headers;
+        } else if (err.request) {
+          errorOutput._errorType = 'network_error';
+          errorOutput._requestSummary = `${err.request.method || ''} ${err.request.url || ''}`;
+        }
+        if (err.code) errorOutput._errorCode = err.code;
+        if (err.message) errorOutput._errorMessage = err.message;
+        if (err.stack) errorOutput._stackTrace = err.stack.split('\n').slice(0, 6).join('\n');
+        nodeResults.push({ nodeId, nodeType: node.type, label: node.label, status: 'error', input: this.truncateData(renderedConfig), output: this.truncateData(errorOutput), durationMs: Date.now() - t0, error: err.message });
         if (node.config.continueOnError) {
           status = 'partial';
         } else {
@@ -706,6 +841,55 @@ class WorkflowEngineService {
         transactionId:   tx.id || tx.transaction_id || tx.tid || '',
         transactionDate: tx.when || tx.transactionDate || tx.created_at || '',
         raw:             tx,
+      };
+    }
+    if (triggerType === 'fb.trigger.unsend') {
+      // fb:onUnsend: { fbAccountId, messageId }
+      return {
+        fbAccountId: data.fbAccountId || '',
+        messageId: data.messageId || '',
+        threadId: data.threadId || '',
+        fromId: '',
+        content: '',
+        body: '',
+        attachments: null,
+        isSelf: false,
+        emoji: '',
+        timestamp: Date.now(),
+      };
+    }
+    if (triggerType === 'fb.trigger.groupEvent') {
+      // fb:onGroupEvent: { fbAccountId, threadId, type, participantId, participants, actorFbId }
+      return {
+        fbAccountId: data.fbAccountId || '',
+        messageId: '',
+        threadId: data.threadId || '',
+        fromId: data.actorFbId || '',
+        content: '',
+        body: '',
+        groupEventType: data.type || '',
+        participantId: data.participantId || '',
+        participants: data.participants || [],
+        actorFbId: data.actorFbId || '',
+        attachments: null,
+        isSelf: false,
+        emoji: '',
+        timestamp: Date.now(),
+      };
+    }
+    if (triggerType.startsWith('fb.trigger.')) {
+      const msg = data.message || {};
+      return {
+        fbAccountId: data.fbAccountId || '',
+        messageId: data.messageId || '',
+        threadId: data.threadId || msg.threadId || msg.replyToID || '',
+        fromId: msg.userID || data.userId || data.fromId || '',
+        content: msg.body || '',
+        body: msg.body || '',
+        attachments: msg.attachments || null,
+        isSelf: !!(msg.isSelf || data.isSelf),
+        emoji: data.emoji || '',
+        timestamp: Number(msg.timestamp || data.timestamp || msg.timestamp_precise || Date.now()),
       };
     }
     return { ...data };
@@ -1095,18 +1279,49 @@ class WorkflowEngineService {
         let headers: Record<string, any> = {};
         let body: any = undefined;
         let params: any = undefined;
+        const method = (cfg.method || 'POST').toUpperCase();
+        const url = cfg.url || '';
         try { headers = cfg.headers ? (typeof cfg.headers === 'string' ? JSON.parse(cfg.headers) : cfg.headers) : {}; } catch {}
         try { body = cfg.body ? (typeof cfg.body === 'string' ? JSON.parse(cfg.body) : cfg.body) : undefined; } catch { body = cfg.body; }
         try { params = cfg.params ? (typeof cfg.params === 'string' ? JSON.parse(cfg.params) : cfg.params) : undefined; } catch {}
-        const response = await axios({
-          method: (cfg.method || 'POST').toUpperCase(),
-          url: cfg.url,
-          headers,
-          data: body,
-          params,
-          timeout: Number(cfg.timeout ?? 10000),
-        });
-        return { status: response.status, data: response.data };
+        const startTime = Date.now();
+        try {
+          const response = await axios({
+            method,
+            url,
+            headers,
+            data: body,
+            params,
+            timeout: Number(cfg.timeout ?? 10000),
+            // Accept all HTTP status codes — 4xx/5xx are valid business responses,
+            // not node errors. Let the workflow logic (e.g. logic.if) decide success/failure.
+            validateStatus: () => true,
+          });
+          return {
+            status: response.status,
+            statusText: response.statusText,
+            data: response.data,
+            headers: response.headers,
+            _request: { method, url, headers, body, params },
+            _durationMs: Date.now() - startTime,
+          };
+        } catch (axiosErr: any) {
+          // Network errors (ECONNREFUSED, DNS, timeout) — don't throw, return
+          // structured error response so downstream nodes can always access output.
+          const isTimeout = axiosErr.code === 'ECONNABORTED' || axiosErr.message?.includes('timeout');
+          const isConnRefused = axiosErr.code === 'ECONNREFUSED';
+          const isDns = axiosErr.code === 'ENOTFOUND' || axiosErr.code === 'EAI_AGAIN';
+          return {
+            status: 0,
+            statusText: '',
+            data: null,
+            _error: true,
+            _errorType: isTimeout ? 'timeout' : isConnRefused ? 'connection_refused' : isDns ? 'dns_error' : 'network_error',
+            _errorMessage: axiosErr.message,
+            _request: { method, url, headers, body, params },
+            _durationMs: Date.now() - startTime,
+          };
+        }
       }
 
       case 'output.log': {
@@ -1120,7 +1335,8 @@ class WorkflowEngineService {
 
       // ── Google Sheets ────────────────────────────────────────────────────
       case 'sheets.appendRow': {
-        const { google } = require('googleapis');
+        if (!cfg.spreadsheetId) throw new Error('[sheets.appendRow] spreadsheetId required');
+        if (!cfg.serviceAccountPath) throw new Error('[sheets.appendRow] serviceAccountPath required');
         const auth = new google.auth.GoogleAuth({
           keyFile: cfg.serviceAccountPath,
           scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -1131,7 +1347,10 @@ class WorkflowEngineService {
           const parsed = typeof cfg.values === 'string' ? JSON.parse(cfg.values) : cfg.values;
           rowValues = Array.isArray(parsed[0]) ? parsed : [parsed];
         } catch {
-          rowValues = [[cfg.values]];
+          // JSON parse failed (e.g., template vars contain special chars) → split by newline or single cell
+          const raw = String(cfg.values ?? '');
+          const lines = raw.split('\n').filter(Boolean);
+          rowValues = lines.length > 0 ? [lines] : [[raw]];
         }
         const res = await sheets.spreadsheets.values.append({
           spreadsheetId: cfg.spreadsheetId,
@@ -1139,7 +1358,7 @@ class WorkflowEngineService {
           valueInputOption: 'USER_ENTERED',
           insertDataOption: 'INSERT_ROWS',
           requestBody: { values: rowValues },
-        });
+        }, { timeout: 30000 });
         return {
           success: true,
           updatedRange: res.data.updates?.updatedRange || '',
@@ -1148,22 +1367,26 @@ class WorkflowEngineService {
       }
 
       case 'sheets.readValues': {
-        const { google } = require('googleapis');
+        if (!cfg.spreadsheetId) throw new Error('[sheets.readValues] spreadsheetId required');
+        if (!cfg.serviceAccountPath) throw new Error('[sheets.readValues] serviceAccountPath required');
         const auth = new google.auth.GoogleAuth({
           keyFile: cfg.serviceAccountPath,
           scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
         });
         const sheets = google.sheets({ version: 'v4', auth });
+        const range = cfg.range || 'Sheet1!A1:Z1000';
         const res = await sheets.spreadsheets.values.get({
           spreadsheetId: cfg.spreadsheetId,
-          range: cfg.range || `${cfg.sheetName || 'Sheet1'}!A1:Z1000`,
-        });
+          range,
+        }, { timeout: 30000 });
         const rows: any[][] = res.data.values || [];
         return { rows, count: rows.length, firstRow: rows[0] || [] };
       }
 
       case 'sheets.updateCell': {
-        const { google } = require('googleapis');
+        if (!cfg.spreadsheetId) throw new Error('[sheets.updateCell] spreadsheetId required');
+        if (!cfg.serviceAccountPath) throw new Error('[sheets.updateCell] serviceAccountPath required');
+        if (!cfg.range) throw new Error('[sheets.updateCell] range required');
         const auth = new google.auth.GoogleAuth({
           keyFile: cfg.serviceAccountPath,
           scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -1174,7 +1397,7 @@ class WorkflowEngineService {
           range: cfg.range,
           valueInputOption: 'USER_ENTERED',
           requestBody: { values: [[cfg.value]] },
-        });
+        }, { timeout: 30000 });
         return { success: true, range: cfg.range };
       }
 
@@ -1737,39 +1960,286 @@ class WorkflowEngineService {
 
       // ── Facebook ─────────────────────────────────────────────────────────────
       case 'fb.trigger.message':
+      case 'fb.trigger.image':
+      case 'fb.trigger.video':
+      case 'fb.trigger.file':
+      case 'fb.trigger.sticker':
+      case 'fb.trigger.reaction':
+      case 'fb.trigger.unsend':
+      case 'fb.trigger.groupEvent':
         return { ...ctx.trigger };
 
       case 'fb.action.sendMessage': {
-        const accountId = cfg.accountId || ctx.trigger?.fbAccountId;
-        if (!accountId) throw new Error('[fb.action.sendMessage] accountId required');
-        const service = FacebookService.getInstance(accountId);
+        const rawAccountId = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawAccountId) throw new Error('[fb.action.sendMessage] accountId required');
+        const accountId = this.resolveFBAccountId(rawAccountId);
+        if (!cfg.message) throw new Error('[fb.action.sendMessage] message required');
         const threadId = cfg.threadId || ctx.trigger?.threadId;
         if (!threadId) throw new Error('[fb.action.sendMessage] threadId required');
-        const result = await service.sendMessage(String(threadId), String(cfg.message || ''));
-        return { success: result.success, messageId: result.messageId };
+
+        const result = await FacebookSendService.sendTextMessage({
+          accountId,
+          threadId: String(threadId),
+          body: String(cfg.message || ''),
+          typeChat: cfg.typeChat,
+          replyToMessageId: cfg.replyToMessageId,
+        });
+        return {
+          success: result.success,
+          messageId: result.messageId,
+          ...(result.error ? { error: result.error } : {}),
+        };
       }
 
       case 'fb.action.addReaction': {
-        const accountId = cfg.accountId || ctx.trigger?.fbAccountId;
-        if (!accountId) throw new Error('[fb.action.addReaction] accountId required');
-        const service = FacebookService.getInstance(accountId);
+        const rawAccountId = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawAccountId) throw new Error('[fb.action.addReaction] accountId required');
+        const accountId = this.resolveFBAccountId(rawAccountId);
+        const service = await FacebookService.getInstance(accountId);
         const messageId = cfg.messageId || ctx.trigger?.messageId;
         if (!messageId) throw new Error('[fb.action.addReaction] messageId required');
+        // E2EE 1:1 → cần gửi qua bridge (reaction có mã hoá)
+        if (cfg.typeChat === 'user' && service.isE2EEConnected()) {
+          const { normalizeChatJid } = require('../facebook/FacebookUtils');
+          const chatJid = normalizeChatJid(String(cfg.threadId || ctx.trigger?.threadId || ''));
+          const senderJid = normalizeChatJid(accountId);
+          const e2eeResult = await service.sendE2EEReaction(chatJid, String(messageId), senderJid, cfg.emoji || '👍');
+          return { success: e2eeResult.success };
+        }
         await service.addReaction(String(messageId), cfg.emoji || '👍', 'add');
         return { success: true };
       }
 
       case 'fb.action.sendImage': {
-        const accountId = cfg.accountId || ctx.trigger?.fbAccountId;
-        if (!accountId) throw new Error('[fb.action.sendImage] accountId required');
-        const service = FacebookService.getInstance(accountId);
+
+        const rawAccountId = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawAccountId) throw new Error('[fb.action.sendImage] accountId required');
+        const accountId = this.resolveFBAccountId(rawAccountId);
+        const service = await FacebookService.getInstance(accountId);
         const threadId = cfg.threadId || ctx.trigger?.threadId;
         if (!threadId) throw new Error('[fb.action.sendImage] threadId required');
-        const att = await service.uploadAttachment(String(cfg.filePath));
+        const filePath = String(cfg.filePath);
+        const caption = cfg.body || cfg.message || '';
+        const isUser = /^\d+$/.test(String(threadId));
+
+        // E2EE 1:1: try bridge first (handles upload internally)
+        if (isUser && service.isE2EEConnected()) {
+          const { normalizeChatJid } = require('../facebook/FacebookUtils');
+          const chatJid = normalizeChatJid(String(threadId));
+          const e2eeResult = await service.sendE2EEImage(chatJid, filePath, caption);
+          if (e2eeResult.success && e2eeResult.messageId) {
+            const fbSenderId = service.getRealFacebookId() || accountId;
+            const fileName = require('path').basename(filePath);
+            await FacebookSendService.persistSentMessage({
+              accountId, threadId: String(threadId),
+              messageId: e2eeResult.messageId,
+              body: caption || null,
+              fbSenderId,
+              timestamp: e2eeResult.timestamp || Date.now(),
+              type: 'image',
+              isUserMessage: true,
+              attachments: JSON.stringify([{ type: 'image', name: fileName }]),
+            });
+            return { success: true, messageId: e2eeResult.messageId };
+          }
+        }
+
+        // REST fallback: upload + send with attachment
+        const att = await service.uploadAttachment(filePath);
         if (!att) throw new Error('[fb.action.sendImage] Upload failed');
-        // Send message with attachment reference
-        const result = await service.sendMessage(String(threadId), cfg.body || '', { attachmentId: att.attachmentId });
-        return { success: result.success };
+        let result = await service.sendMessage(String(threadId), caption, { attachmentId: att.attachmentId });
+
+        // E2EE error detection → retry via bridge for 1:1
+        if (!result.success && isUser && /disabled|vô hiệu hoá|encrypted/i.test(result.error || '')) {
+          Logger.warn(`[Workflow:fb.action.sendImage] E2EE error, retrying via bridge for thread=${threadId}`);
+          if (!service.isE2EEConnected()) {
+            try { await service.retryE2EE(); } catch {}
+          }
+          if (service.isE2EEConnected()) {
+            const { normalizeChatJid } = require('../facebook/FacebookUtils');
+            const chatJid = normalizeChatJid(String(threadId));
+            const e2eeResult = await service.sendE2EEImage(chatJid, filePath, caption);
+            if (e2eeResult.success && e2eeResult.messageId) {
+              const fbSenderId = service.getRealFacebookId() || accountId;
+              const fileName = require('path').basename(filePath);
+              await FacebookSendService.persistSentMessage({
+                accountId, threadId: String(threadId),
+                messageId: e2eeResult.messageId,
+                body: caption || null,
+                fbSenderId,
+                timestamp: e2eeResult.timestamp || Date.now(),
+                type: 'image',
+                isUserMessage: true,
+                attachments: JSON.stringify([{ type: 'image', name: fileName }]),
+              });
+              return { success: true, messageId: e2eeResult.messageId };
+            }
+          }
+        }
+
+        // ── Save DB + emit cho REST path ──
+        if (result.success && result.messageId) {
+          const fbSenderId = service.getRealFacebookId() || accountId;
+          const fileName = require('path').basename(filePath);
+          await FacebookSendService.persistSentMessage({
+            accountId, threadId: String(threadId),
+            messageId: result.messageId,
+            body: caption || null,
+            fbSenderId,
+            timestamp: result.timestamp || Date.now(),
+            type: 'image',
+            isUserMessage: isUser,
+            attachments: JSON.stringify([{ type: 'image', name: fileName, id: String(att.attachmentId) }]),
+          });
+        }
+
+        return { success: result.success, messageId: result.messageId };
+      }
+
+      case 'fb.action.sendTyping': {
+        const rawA1 = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawA1) throw new Error('[fb.action.sendTyping] accountId required');
+        const a1 = this.resolveFBAccountId(rawA1);
+        const s1 = await FacebookService.getInstance(a1);
+        const t1 = cfg.threadId || ctx.trigger?.threadId;
+        if (!t1) throw new Error('[fb.action.sendTyping] threadId required');
+        await s1.sendTyping(String(t1), cfg.isTyping !== false);
+        return { success: true };
+      }
+
+      case 'fb.action.markAsRead': {
+        const rawA2 = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawA2) throw new Error('[fb.action.markAsRead] accountId required');
+        const a2 = this.resolveFBAccountId(rawA2);
+        const s2 = await FacebookService.getInstance(a2);
+        const t2 = cfg.threadId || ctx.trigger?.threadId;
+        if (!t2) throw new Error('[fb.action.markAsRead] threadId required');
+        await s2.markReadOnServer(String(t2));
+        return { success: true };
+      }
+
+      case 'fb.action.forward': {
+        const rawA3 = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawA3) throw new Error('[fb.action.forward] accountId required');
+        const a3 = this.resolveFBAccountId(rawA3);
+        const s3 = await FacebookService.getInstance(a3);
+        const m1 = cfg.messageId || ctx.trigger?.messageId;
+        if (!m1) throw new Error('[fb.action.forward] messageId required');
+        if (!cfg.targetThreadId) throw new Error('[fb.action.forward] targetThreadId required');
+        const r1 = await s3.forwardMessage(String(m1), String(cfg.targetThreadId));
+        return { success: r1.success };
+      }
+
+      case 'fb.action.pin': {
+        const rawA4 = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawA4) throw new Error('[fb.action.pin] accountId required');
+        const a4 = this.resolveFBAccountId(rawA4);
+        const s4 = await FacebookService.getInstance(a4);
+        const m2 = cfg.messageId || ctx.trigger?.messageId;
+        if (!m2) throw new Error('[fb.action.pin] messageId required');
+        const t3 = cfg.threadId || ctx.trigger?.threadId;
+        if (!t3) throw new Error('[fb.action.pin] threadId required');
+        const r2 = await s4.pinMessage(String(m2), String(t3));
+        return { success: r2.success };
+      }
+
+      case 'fb.action.unpin': {
+        const rawA5 = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawA5) throw new Error('[fb.action.unpin] accountId required');
+        const a5 = this.resolveFBAccountId(rawA5);
+        const s5 = await FacebookService.getInstance(a5);
+        const m3 = cfg.messageId || ctx.trigger?.messageId;
+        if (!m3) throw new Error('[fb.action.unpin] messageId required');
+        const t4 = cfg.threadId || ctx.trigger?.threadId;
+        if (!t4) throw new Error('[fb.action.unpin] threadId required');
+        const r3 = await s5.unpinMessage(String(m3), String(t4));
+        return { success: r3.success };
+      }
+
+      case 'fb.action.createPoll': {
+        const rawA6 = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawA6) throw new Error('[fb.action.createPoll] accountId required');
+        const a6 = this.resolveFBAccountId(rawA6);
+        const s6 = await FacebookService.getInstance(a6);
+        const t5 = cfg.threadId || ctx.trigger?.threadId;
+        if (!t5) throw new Error('[fb.action.createPoll] threadId required');
+        if (!cfg.question) throw new Error('[fb.action.createPoll] question required');
+        const opts: string[] = String(cfg.options || '').split('\n').map((x: string) => x.trim()).filter(Boolean);
+        const r4 = await s6.createPoll(String(t5), String(cfg.question), opts);
+        return { success: r4.success, pollId: r4.pollId };
+      }
+
+      case 'fb.action.block': {
+        const rawA7 = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawA7) throw new Error('[fb.action.block] accountId required');
+        const a7 = this.resolveFBAccountId(rawA7);
+        const s7 = await FacebookService.getInstance(a7);
+        const u1 = cfg.userId || ctx.trigger?.fromId;
+        if (!u1) throw new Error('[fb.action.block] userId required');
+        const r5 = await s7.blockUser(String(u1));
+        return { success: r5.success };
+      }
+
+      case 'fb.action.unsend': {
+        const rawA8 = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawA8) throw new Error('[fb.action.unsend] accountId required');
+        const a8 = this.resolveFBAccountId(rawA8);
+        const s8 = await FacebookService.getInstance(a8);
+        const m4 = cfg.messageId || ctx.trigger?.messageId;
+        if (!m4) throw new Error('[fb.action.unsend] messageId required');
+        const r6 = await s8.unsendMessage(String(m4));
+        return { success: r6.success };
+      }
+
+      case 'fb.action.editMessage': {
+        const rawA9 = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawA9) throw new Error('[fb.action.editMessage] accountId required');
+        const a9 = this.resolveFBAccountId(rawA9);
+        const s9 = await FacebookService.getInstance(a9);
+        const m5 = cfg.messageId || ctx.trigger?.messageId;
+        if (!m5) throw new Error('[fb.action.editMessage] messageId required');
+        if (!cfg.text && !cfg.newText) throw new Error('[fb.action.editMessage] text required');
+        const editText = cfg.text || cfg.newText || '';
+        const r7 = await s9.editMessage(String(m5), String(editText));
+        return { success: r7.success };
+      }
+
+      case 'fb.action.changeName': {
+        const rawA10 = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawA10) throw new Error('[fb.action.changeName] accountId required');
+        const a10 = this.resolveFBAccountId(rawA10);
+        const s10 = await FacebookService.getInstance(a10);
+        const t6 = cfg.threadId || ctx.trigger?.threadId;
+        if (!t6) throw new Error('[fb.action.changeName] threadId required');
+        if (!cfg.name) throw new Error('[fb.action.changeName] name required');
+        const r8 = await s10.changeThreadName(String(t6), String(cfg.name));
+        return { success: r8 };
+      }
+
+      case 'fb.action.changeEmoji': {
+        const rawA11 = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawA11) throw new Error('[fb.action.changeEmoji] accountId required');
+        const a11 = this.resolveFBAccountId(rawA11);
+        const s11 = await FacebookService.getInstance(a11);
+        const t7 = cfg.threadId || ctx.trigger?.threadId;
+        if (!t7) throw new Error('[fb.action.changeEmoji] threadId required');
+        if (!cfg.emoji) throw new Error('[fb.action.changeEmoji] emoji required');
+        const r9 = await s11.changeThreadEmoji(String(t7), String(cfg.emoji));
+        return { success: r9 };
+      }
+
+      case 'fb.action.changeNickname': {
+        const rawA12 = cfg.accountId || ctx.trigger?.fbAccountId || ctx.pageId;
+        if (!rawA12) throw new Error('[fb.action.changeNickname] accountId required');
+        const a12 = this.resolveFBAccountId(rawA12);
+        const s12 = await FacebookService.getInstance(a12);
+        const t8 = cfg.threadId || ctx.trigger?.threadId;
+        if (!t8) throw new Error('[fb.action.changeNickname] threadId required');
+        const u2 = cfg.userId || ctx.trigger?.fromId;
+        if (!u2) throw new Error('[fb.action.changeNickname] userId required');
+        if (cfg.nickname === undefined) throw new Error('[fb.action.changeNickname] nickname required');
+        const r10 = await s12.changeNickname(String(t8), String(u2), String(cfg.nickname));
+        return { success: r10 };
       }
 
       default:
@@ -1823,8 +2293,9 @@ class WorkflowEngineService {
   }
 
   private renderTemplate(template: string, ctx: ExecutionContext): string {
-    return template.replace(/\{\{\s*([^\s{}]+)\s*\}\}/gu, (_, expr) => {
+    return template.replace(/\{\{\s*([\s\S]*?)\s*\}\}/gu, (_, raw) => {
       try {
+        const expr = raw.trim();
         if (expr.startsWith('$trigger.'))   return String(ctx.trigger?.[expr.slice(9)] ?? '');
         if (expr.startsWith('$var.'))       return String(ctx.variables?.[expr.slice(5)] ?? '');
         if (expr === '$pageId')             return ctx.pageId ?? '';
@@ -1891,6 +2362,35 @@ class WorkflowEngineService {
       }
       return acc[key];
     }, obj);
+  }
+
+  /**
+   * Truncate data for log storage to prevent huge JSON blobs.
+   * Truncates strings > 1000 chars and arrays/objects beyond a depth limit.
+   */
+  private truncateData(data: any, maxStrLen: number = 1000, maxDepth: number = 5, depth: number = 0): any {
+    if (depth > maxDepth) return '[MaxDepth]';
+    if (data === null || data === undefined) return data;
+    if (typeof data === 'string') {
+      return data.length > maxStrLen ? data.substring(0, maxStrLen) + `...[truncated, total ${data.length} chars]` : data;
+    }
+    if (typeof data === 'number' || typeof data === 'boolean') return data;
+    if (Array.isArray(data)) {
+      if (data.length > 50) {
+        const arr = data.slice(0, 50).map((item: any) => this.truncateData(item, maxStrLen, maxDepth, depth + 1));
+        arr.push(`...[truncated, total ${data.length} items]`);
+        return arr;
+      }
+      return data.map((item: any) => this.truncateData(item, maxStrLen, maxDepth, depth + 1));
+    }
+    if (typeof data === 'object') {
+      const result: Record<string, any> = {};
+      for (const [key, value] of Object.entries(data)) {
+        result[key] = this.truncateData(value, maxStrLen, maxDepth, depth + 1);
+      }
+      return result;
+    }
+    return String(data);
   }
 
   /**

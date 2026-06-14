@@ -539,7 +539,7 @@ export function InviteToGroupModal({ contactId, contactName, onClose }: {
           </div>
         </div>
         {labels.length > 0 && (
-          <div className="flex-shrink-0 flex gap-1.5 px-4 py-2 overflow-x-auto border-b border-gray-700 scrollbar-hide" style={{ minHeight: '54px', maxHeight: '54px' }}>
+          <div className="flex-shrink-0 flex gap-1.5 px-4 py-2 overflow-x-auto border-b border-gray-700 scrollbar-hide" style={{ minHeight: '3.375rem', maxHeight: '3.375rem' }}>
             <LabelChip label="Tất cả" active={selectedLabel === null} onClick={() => setSelectedLabel(null)} />
             {labels.map(l => (
               <LabelChip key={l.id} label={l.text} active={selectedLabel === l.id}

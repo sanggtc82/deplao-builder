@@ -1309,7 +1309,7 @@ export default function IntegrationQuickPanel({ onClose, contextPhone, contextNa
   const showSidebar = !selectedAction;
 
   return (
-    <div className="h-full flex flex-col bg-gray-800 border-l border-gray-700 overflow-hidden" style={{ width: 330 }}>
+    <div className="h-full flex flex-col bg-gray-800 border-l border-gray-700 overflow-hidden" style={{ width: '20.625rem' }}>
         {/* ── Header ──────────────────────────────────────────── */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700/60 flex-shrink-0 bg-gray-850">
           <div className="flex items-center gap-3">

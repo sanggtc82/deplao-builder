@@ -11,7 +11,8 @@ import GroupAvatar from '../common/GroupAvatar';
 import MediaSection, { MediaDetailPanel, MediaTab } from './MediaSection';
 import { GroupActionSection } from './ConversationActions';
 import { syncZaloGroups, MemberPlaceholder } from '@/lib/zaloGroupUtils';
-import { getCapability, type Channel } from '../../../configs/channelConfig';
+import { getCapability, type Channel, type ChannelCapability } from '../../../configs/channelConfig';
+import * as channelIpc from '@/lib/channelIpc';
 
 type PanelView = 'info' | 'members' | 'manage' | 'media' | 'pending';
 
@@ -94,6 +95,9 @@ export default function GroupInfoPanel() {
   const [muteDropdownPos, setMuteDropdownPos] = useState<{ top: number; left: number } | null>(null);
   const [userProfilePopup, setUserProfilePopup] = useState<{ userId: string; x: number; y: number } | null>(null);
   const [pendingCount, setPendingCount] = useState<number | null>(null);
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const muteRef = useRef<HTMLDivElement>(null);
 
   const contactList = activeAccountId ? (contacts[activeAccountId] || []) : [];
@@ -103,7 +107,6 @@ export default function GroupInfoPanel() {
 
   // Channel capability
   const channelCap = getCapability((contact?.channel || 'zalo') as Channel);
-  const isFBChannel = channelCap.id === 'facebook';
 
   const getAuth = () => {
     const acc = getActiveAccount();
@@ -235,7 +238,7 @@ export default function GroupInfoPanel() {
   const fetchGroupInfo = async () => {
     if (!activeThreadId || !activeAccountId) return;
     // FB groups: don't call Zalo API
-    if (isFBChannel) return;
+    if (channelCap.id === 'facebook') return;
     // Guard: verify thread still belongs to current account at fetch time
     const currentContacts = useChatStore.getState().contacts[activeAccountId] || [];
     if (currentContacts.length > 0 && !currentContacts.some(c => c.contact_id === activeThreadId)) return;
@@ -292,15 +295,22 @@ export default function GroupInfoPanel() {
         if (id) currentMemMap.set(id, cm);
       }
       const memVerIds = parseMemVerList(gData.memVerList || []);
-      const rawIds: string[] =
-        gData.memberIds?.length > 0  ? gData.memberIds :
-        currentMemMap.size > 0        ? Array.from(currentMemMap.keys()) :
-        memVerIds;
 
-      const memberIds: string[] = [...new Set(
-        rawIds.map(id => String(id).replace(/_0$/, '').trim()).filter(id => /^\d+$/.test(id))
-      )];
-      console.log('[GroupInfoPanel] memberIds:', memberIds.length, 'first3:', memberIds.slice(0, 3));
+      // Merge ALL sources of member IDs instead of picking one
+      const idsFromMemberIds: string[] = (gData.memberIds || []).map(id => String(id).replace(/_0$/, '').trim()).filter(id => /^\d+$/.test(id));
+      const idsFromCurrentMems: string[] = Array.from(currentMemMap.keys()).filter(id => /^\d+$/.test(id));
+      const idsFromMemVer: string[] = memVerIds.map(id => id.replace(/_0$/, '').trim()).filter(id => /^\d+$/.test(id));
+
+      console.log('[GroupInfoPanel] Group sources — memberIds:', idsFromMemberIds.length,
+        'currentMems:', idsFromCurrentMems.length,
+        'memVerList:', idsFromMemVer.length,
+        'hasMoreMember:', gData.hasMoreMember,
+        'totalMember:', gData.totalMember,
+        'lockViewMember:', gData.setting?.lockViewMember);
+
+      const allRawIds = [...new Set([...idsFromMemberIds, ...idsFromCurrentMems, ...idsFromMemVer])];
+      const memberIds: string[] = allRawIds;
+      console.log('[GroupInfoPanel] memberIds union:', memberIds.length, 'first5:', memberIds.slice(0, 5));
 
       // Build placeholders: empty displayName → forces full enrichment via syncZaloGroups
       const placeholders: MemberPlaceholder[] = memberIds.map(memberId => {
@@ -404,6 +414,7 @@ export default function GroupInfoPanel() {
           onBack={() => setPanelView('info')}
           onRefresh={fetchGroupInfo}
           myAccountId={activeAccountId || ''}
+          channelCap={channelCap}
           onShowProfile={(userId, x, y) => setUserProfilePopup({ userId, x, y })}
         />
         {userProfilePopup && (
@@ -428,6 +439,7 @@ export default function GroupInfoPanel() {
         groupId={activeThreadId}
         onBack={() => setPanelView('info')}
         myAccountId={activeAccountId || ''}
+        channel={contact?.channel || 'zalo'}
       />
     );
   }
@@ -487,11 +499,11 @@ export default function GroupInfoPanel() {
 
       {/* Group avatar + name */}
       <div className="flex flex-col items-center py-5 px-4 border-b border-gray-700">
-        <div className={`relative ${!isFBChannel ? 'group cursor-pointer' : ''}`}
-          onClick={!isFBChannel ? handleChangeAvatar : undefined}
-          title={!isFBChannel ? 'Đổi ảnh nhóm' : undefined}>
+        <div className={`relative ${channelCap.supportsChangeGroupAvatar ? 'group cursor-pointer' : ''}`}
+          onClick={channelCap.supportsChangeGroupAvatar ? handleChangeAvatar : undefined}
+          title={channelCap.supportsChangeGroupAvatar ? 'Đổi ảnh nhóm' : undefined}>
           <GroupAvatar avatarUrl={groupInfo?.avatar || avatarUrl} groupInfo={groupInfo} name={displayName} size="lg" />
-          {!isFBChannel && (
+          {channelCap.supportsChangeGroupAvatar && (
           <div className="absolute inset-0 rounded-full bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
               <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
@@ -548,8 +560,10 @@ export default function GroupInfoPanel() {
         {channelCap.supportsPinConversation && (
           <GrpActionBtn icon={isPinned ? '📌' : '📍'} label={isPinned ? 'Bỏ ghim' : 'Ghim hội thoại'} onClick={handleTogglePin} active={isPinned} />
         )}
-        <GrpActionBtn icon="👥" label="Thêm thành viên" onClick={() => setAddMemberOpen(true)} />
-        {!isFBChannel && (
+        {channelCap.supportsInviteToGroup && (
+          <GrpActionBtn icon="👥" label="Thêm thành viên" onClick={() => setAddMemberOpen(true)} />
+        )}
+        {channelCap.supportsGroupManage && (
           <GrpActionBtn icon="⚙️" label="Quản lý nhóm" onClick={() => setPanelView('manage')} />
         )}
       </div>
@@ -583,7 +597,7 @@ export default function GroupInfoPanel() {
       )}
 
       {/* Chờ duyệt vào nhóm — chỉ hiển thị với admin/owner và kênh Zalo */}
-      {!isFBChannel && groupInfo && canManage(getMyRole(groupInfo, activeAccountId)) && (
+      {channelCap.supportsPendingApproval && groupInfo && canManage(getMyRole(groupInfo, activeAccountId)) && (
         <button
           onClick={() => setPanelView('pending')}
           className="w-full flex items-center justify-between px-4 py-3 border-b border-gray-700 hover:bg-gray-700/40 transition-colors group"
@@ -671,11 +685,41 @@ export default function GroupInfoPanel() {
           onClose={() => setUserProfilePopup(null)}
         />
       )}
+
+      {/* Rename dialog */}
+      {showRenameDialog && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50"
+          onClick={() => setShowRenameDialog(false)}>
+          <div className="bg-gray-800 border border-gray-600 rounded-2xl p-5 w-80 shadow-2xl"
+            onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-semibold text-white mb-3">Đổi tên nhóm</p>
+            <input
+              ref={renameInputRef}
+              autoFocus
+              value={renameValue}
+              onChange={e => setRenameValue(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleRenameConfirm(); if (e.key === 'Escape') setShowRenameDialog(false); }}
+              className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 mb-4"
+              placeholder="Nhập tên nhóm mới..."
+            />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowRenameDialog(false)}
+                className="px-4 py-1.5 text-xs text-gray-300 hover:text-white bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors">
+                Hủy
+              </button>
+              <button onClick={handleRenameConfirm}
+                className="px-4 py-1.5 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
+                Lưu
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
   function handleChangeAvatar() {
-    if (isFBChannel) return; // FB uses different mechanism
+    if (channelCap.id === 'facebook') return; // FB uses different mechanism
     const input = document.createElement('input');
     input.type = 'file'; input.accept = 'image/*';
     input.onchange = async (e) => {
@@ -696,17 +740,21 @@ export default function GroupInfoPanel() {
 
   function startRenameGroup() {
     if (!channelCap.supportsGroupRename) return;
-    const newName = window.prompt('Tên nhóm mới:', groupInfo?.name || displayName);
-    if (!newName?.trim() || !activeThreadId) return;
-    const auth = getAuth();
-    if (!auth) return;
-    ipc.zalo?.changeGroupName({ auth, name: newName.trim(), groupId: activeThreadId })
+    setRenameValue(groupInfo?.name || displayName);
+    setShowRenameDialog(true);
+  }
+
+  async function handleRenameConfirm() {
+    const newName = renameValue.trim();
+    if (!newName || !activeThreadId) return;
+    setShowRenameDialog(false);
+    channelIpc.changeGroupName(channelCap.id, { accountId: activeAccountId!, threadId: activeThreadId, name: newName })
       .then((res: any) => {
         if (res?.success) {
           showNotification('Đã đổi tên nhóm', 'success');
-          setLocalGroupInfo(prev => prev ? { ...prev, name: newName.trim() } : prev);
+          setLocalGroupInfo(prev => prev ? { ...prev, name: newName } : prev);
           if (activeAccountId) {
-            useChatStore.getState().updateContact(activeAccountId, { contact_id: activeThreadId, display_name: newName.trim() });
+            useChatStore.getState().updateContact(activeAccountId, { contact_id: activeThreadId, display_name: newName });
           }
         } else showNotification(extractApiError(res, 'Đổi tên nhóm thất bại'), 'error');
       }).catch((e: any) => showNotification(extractApiError(e, 'Đổi tên nhóm thất bại'), 'error'));
@@ -729,12 +777,13 @@ function GrpActionBtn({ icon, label, onClick, active }: { icon: string; label: s
 
 
 // ─── MembersPanel ─────────────────────────────────────────────────────────────
-function MembersPanel({ groupInfo, groupId, onBack, onRefresh, myAccountId, onShowProfile }: {
+function MembersPanel({ groupInfo, groupId, onBack, onRefresh, myAccountId, channelCap, onShowProfile }: {
   groupInfo: CachedGroupInfo | null;
   groupId: string;
   onBack: () => void;
   onRefresh: () => void;
   myAccountId: string;
+  channelCap?: ChannelCapability;
   onShowProfile?: (userId: string, x: number, y: number) => void;
 }) {
   const { getActiveAccount } = useAccountStore();
@@ -852,16 +901,18 @@ function MembersPanel({ groupInfo, groupId, onBack, onRefresh, myAccountId, onSh
         </button>
         <span className="text-sm font-semibold text-white flex-1 text-center">Thành viên</span>
         {/* Add member */}
-        <button
-          title="Thêm thành viên"
-          onClick={() => setAddMemberOpen(true)}
-          className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-gray-700 text-gray-400 hover:text-white transition-colors flex-shrink-0"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>
-            <line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>
-          </svg>
-        </button>
+        {(channelCap?.supportsInviteToGroup ?? true) && (
+          <button
+            title="Thêm thành viên"
+            onClick={() => setAddMemberOpen(true)}
+            className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-gray-700 text-gray-400 hover:text-white transition-colors flex-shrink-0"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>
+              <line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>
+            </svg>
+          </button>
+        )}
 
         {/* Reload member info */}
         <button
@@ -897,7 +948,8 @@ function MembersPanel({ groupInfo, groupId, onBack, onRefresh, myAccountId, onSh
               className="flex-shrink-0 focus:outline-none hover:opacity-80 transition-opacity"
             >
               {m.avatar ? (
-                <img src={m.avatar} alt="" className="w-9 h-9 rounded-full object-cover" />
+                <img src={m.avatar} alt="" className="w-9 h-9 rounded-full object-cover"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
               ) : (
                 <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-bold">
                   {(m.displayName || '?').charAt(0).toUpperCase()}
@@ -912,7 +964,7 @@ function MembersPanel({ groupInfo, groupId, onBack, onRefresh, myAccountId, onSh
               </div>
             </div>
             {/* Context menu — admin only, not for group owner */}
-            {isAdmin && m.role !== 1 && m.userId !== myAccountId && (
+            {isAdmin && (channelCap?.supportsGroupAdmin ?? true) && m.role !== 1 && m.userId !== myAccountId && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1218,7 +1270,7 @@ function PendingPanel({ groupId, myAccountId, onBack, onCountChange }: {
 }
 
 // ─── PendingMembersSection ────────────────────────────────────────────────────
-function PendingMembersSection({ groupId, isAdmin }: { groupId: string; isAdmin: boolean }) {
+function PendingMembersSection({ groupId, isAdmin, channel }: { groupId: string; isAdmin: boolean; channel: string }) {
   const { getActiveAccount } = useAccountStore();
   const { showNotification } = useAppStore();
   const [pending, setPending] = useState<Array<{ userId: string; displayName: string; avatar: string }>>([]);
@@ -1234,6 +1286,7 @@ function PendingMembersSection({ groupId, isAdmin }: { groupId: string; isAdmin:
   };
 
   const loadPending = async () => {
+    if (channel !== 'zalo') return;
     const auth = getAuth();
     if (!auth) return;
     setLoading(true);
@@ -1474,12 +1527,13 @@ function PendingMembersSection({ groupId, isAdmin }: { groupId: string; isAdmin:
 }
 
 // ─── ManagePanel ──────────────────────────────────────────────────────────────
-export function ManagePanel({ groupInfo, groupId, onBack, myAccountId, asModal }: {
+export function ManagePanel({ groupInfo, groupId, onBack, myAccountId, asModal, channel }: {
   groupInfo: CachedGroupInfo | null;
   groupId: string;
   onBack: () => void;
   myAccountId: string;
   asModal?: boolean;
+  channel?: string;
 }) {
   const { getActiveAccount, activeAccountId } = useAccountStore();
   const { showNotification } = useAppStore();
@@ -1687,7 +1741,7 @@ export function ManagePanel({ groupInfo, groupId, onBack, myAccountId, asModal }
       </div>
 
       {/* Danh sách chờ duyệt — visible for admin khi bật joinAppr */}
-      <PendingMembersSection groupId={groupId} isAdmin={isAdmin} />
+      <PendingMembersSection groupId={groupId} isAdmin={isAdmin} channel={channel || 'zalo'} />
 
       {/* Group link */}
       <div className="border-t border-gray-700 px-4 py-3 space-y-2">

@@ -20,6 +20,10 @@ import CRMSearchTab from './search/CRMSearchTab';
 import CRMRequestsTab from './search/CRMRequestsTab';
 import AddToContactsModal from './contacts/AddToContactsModal';
 import AccountSelectorDropdown from '@/components/common/AccountSelectorDropdown';
+import { getCapability, type Channel } from '../../../configs/channelConfig';
+import ScanPanel from './scan/ScanPanel';
+import ScanHistoryTab from './scan/ScanHistoryTab';
+import ScanStatsTab from './scan/ScanStatsTab';
 
 
 // ── Wizard Step Indicator ────────────────────────────────────────────────
@@ -62,6 +66,10 @@ export default function CRMPage() {
   const { showNotification, openQuickChat, labels, setLabels, navigateToAnalytics, crmRequestUnseenByAccount, clearCRMRequestUnseen } = useAppStore();
   const store = useCRMStore();
   const hasUnreadRequestDot = !!(activeAccountId && crmRequestUnseenByAccount[activeAccountId]);
+
+  const activeAccount = accounts.find(a => a.zalo_id === activeAccountId);
+  const isFacebookAccount = (activeAccount?.channel || 'zalo') === 'facebook';
+  const channelCap = getCapability((activeAccount?.channel || 'zalo') as Channel);
 
   const zaloLabels: LabelData[] = activeAccountId ? (labels[activeAccountId] || []) : [];
 
@@ -167,7 +175,20 @@ export default function CRMPage() {
     } catch {}
   }, [activeAccountId, clearCRMRequestUnseen]);
 
-  useEffect(() => { loadContacts(); loadCampaigns(); loadGroupCount(); loadRequestCount(); }, [activeAccountId]);
+  useEffect(() => {
+    const disabledTabs: Record<string, boolean> = {
+      search: !channelCap.supportsCRMSearch,
+      requests: !channelCap.supportsFriendRequest,
+      campaigns: !channelCap.supportsCampaigns,
+      history: !channelCap.supportsCRMHistory,
+      groups: !channelCap.supportsCRMGroups,
+      scan: !channelCap.supportsScanData,
+      scan_history: !channelCap.supportsScanData,
+      scan_stats: !channelCap.supportsScanData,
+    };
+    if (disabledTabs[store.tab]) store.setTab('contacts');
+    loadContacts(); loadCampaigns(); loadGroupCount(); loadRequestCount();
+  }, [activeAccountId]);
   useEffect(() => { loadContacts(); }, [store.searchText, store.filterContactTypes, store.sortBy, store.sortDir, store.page]);
   useEffect(() => {
     if (activeAccountId && store.tab === 'requests') {
@@ -625,7 +646,15 @@ export default function CRMPage() {
       {/* Top bar */}
       <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-700 flex-shrink-0 bg-gray-850">
         <div className="flex bg-gray-800 rounded-lg p-0.5">
-          {(['search', 'contacts', 'groups', 'requests', 'campaigns', 'history'] as const).map(t => (
+          {(['search', 'contacts', 'groups', 'requests', 'campaigns', 'history', 'scan', 'scan_history', 'scan_stats'] as const).filter(t => {
+            if (t === 'search') return channelCap.supportsCRMSearch;
+            if (t === 'requests') return channelCap.supportsFriendRequest;
+            if (t === 'campaigns') return channelCap.supportsCampaigns;
+            if (t === 'history') return channelCap.supportsCRMHistory;
+            if (t === 'groups') return channelCap.supportsCRMGroups;
+            if (t === 'scan' || t === 'scan_history' || t === 'scan_stats') return channelCap.supportsScanData;
+            return true; // contacts always shown
+          }).map(t => (
             <button key={t} onClick={() => store.setTab(t)}
               className={`px-4 py-1.5 rounded-md text-xs font-medium transition-colors ${store.tab === t ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}>
               {t === 'search' ? '🔍 Tìm kiếm'
@@ -641,6 +670,9 @@ export default function CRMPage() {
                 )
                 : t === 'campaigns' ? `📢 Chiến dịch${store.campaigns.length ? ` (${store.campaigns.length})` : ''}`
                 : t === 'history' ? '📋 Lịch sử'
+                : t === 'scan' ? '📡 Quét dữ liệu'
+                : t === 'scan_history' ? '📋 Lịch sử quét'
+                : t === 'scan_stats' ? '📊 Thống kê'
                 : t}
             </button>
           ))}
@@ -706,7 +738,7 @@ export default function CRMPage() {
                   onFilterChange={store.setFilter}
                   onPageChange={p => store.setFilter({ page: p })}
                   onMessage={handleMessage}
-                  onImportPhones={() => setShowPhoneImport(true)}
+                  onImportPhones={channelCap.supportsCRMPhoneImport ? () => setShowPhoneImport(true) : undefined}
                 />
               </div>
               {activeContact && (
@@ -787,6 +819,27 @@ export default function CRMPage() {
             </div>
           )}
 
+          {/* ── Scan Data tab ── */}
+          {store.tab === 'scan' && (
+            <div className="flex-1 overflow-hidden">
+              <ScanPanel accountId={activeAccountId || ''} />
+            </div>
+          )}
+
+          {/* ── Scan History tab ── */}
+          {store.tab === 'scan_history' && (
+            <div className="flex-1 overflow-hidden">
+              <ScanHistoryTab accountId={activeAccountId || ''} />
+            </div>
+          )}
+
+          {/* ── Scan Stats tab ── */}
+          {store.tab === 'scan_stats' && (
+            <div className="flex-1 overflow-hidden">
+              <ScanStatsTab accountId={activeAccountId || ''} />
+            </div>
+          )}
+
         </div>
 
         <QueueStatusBar status={queueStatus} />
@@ -794,6 +847,7 @@ export default function CRMPage() {
 
       {/* Bulk action bar */}
       <BulkActionBar
+        channel={activeAccount?.channel || 'zalo'}
         selectedCount={store.selectedContactIds.size}
         hasGroupSelected={store.contacts.some(c => store.selectedContactIds.has(c.contact_id) && c.contact_type === 'group')}
         onClearSelection={store.clearSelection}

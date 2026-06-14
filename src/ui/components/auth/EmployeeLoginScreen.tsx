@@ -197,7 +197,7 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
                     </div>
 
                     <div className="px-6 py-3 border-t border-gray-700/50 text-center">
-                        <p className="text-[10px] text-gray-600">Deplao — Quản lý Zalo đa tài khoản</p>
+                        <p className="text-[10px] text-gray-600">Deplao — Quản lý Zalo & Facebook đa tài khoản</p>
                     </div>
                 </div>
             </div>
@@ -311,7 +311,7 @@ export default function EmployeeLoginScreen({ onBossMode, onEmployeeConnected }:
 
                 {/* Footer */}
                 <div className="px-6 py-3 border-t border-gray-700/50 text-center">
-                    <p className="text-[10px] text-gray-600">Deplao — Quản lý Zalo đa tài khoản</p>
+                    <p className="text-[10px] text-gray-600">Deplao — Quản lý Zalo & Facebook đa tài khoản</p>
                 </div>
             </div>
         </div>

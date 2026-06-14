@@ -16,7 +16,7 @@ const Footer: React.FC = () => {
               <span className="font-bold text-lg text-slate-950">Deplao</span>
             </div>
             <p className="text-slate-600 text-sm leading-relaxed max-w-sm">
-              Phần mềm quản lý Zalo chuyên nghiệp dành cho cá nhân và doanh nghiệp.
+              Phần mềm quản lý Zalo & Facebook chuyên nghiệp dành cho cá nhân và doanh nghiệp.
               Nền tảng CRM & Workflow & AI giúp bạn quản lý hàng loạt tài khoản Zalo, triển khai chiến dịch nhắn tin thông minh, chăm sóc khách hàng tự động và vận hành toàn bộ trong một giao diện duy nhất.
             </p>
             <div className="flex items-center gap-3 mt-4">

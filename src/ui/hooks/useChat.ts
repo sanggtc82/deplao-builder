@@ -3,6 +3,7 @@ import { useChatStore, MessageItem, ContactItem } from '@/store/chatStore';
 import { useAccountStore } from '@/store/accountStore';
 import { useAppStore } from '@/store/appStore';
 import ipc from '../lib/ipc';
+import * as channelIpc from '../lib/channelIpc';
 import { sendSeenForThread } from '@/lib/sendSeenHelper';
 
 /**
@@ -51,10 +52,19 @@ export function useChat() {
       setActiveThread(contactId, threadType);
       clearUnread(activeAccountId, contactId);
 
+      // Determine channel from contact data
+      const currentContacts = useChatStore.getState().contacts[activeAccountId] || [];
+      const contact = currentContacts.find(c => c.contact_id === contactId);
+      const channel = (contact?.channel || 'zalo') as string;
+
       // Mark as read in DB
       await ipc.db?.markAsRead({ zaloId: activeAccountId, contactId });
-      // Gửi sự kiện đã đọc cho Zalo
-      sendSeenForThread(activeAccountId, contactId, threadType);
+      // Gửi sự kiện đã đọc: Zalo uses sendSeenForThread, Facebook uses channelIpc
+      if (channel === 'facebook') {
+        channelIpc.markAsRead('facebook', { accountId: activeAccountId, threadId: contactId }).catch(() => {});
+      } else {
+        sendSeenForThread(activeAccountId, contactId, threadType);
+      }
 
       // Load messages from DB
       try {

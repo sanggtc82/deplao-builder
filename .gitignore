@@ -11,4 +11,5 @@ agents/
 .env.production
 *.log
 .DS_Store
-
+docs/
+.vscode/

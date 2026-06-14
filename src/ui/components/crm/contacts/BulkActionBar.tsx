@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { getCapability, type Channel } from '../../../../configs/channelConfig';
 
 interface BulkActionBarProps {
+  channel: string;
   selectedCount: number;
   hasGroupSelected?: boolean;
   onClearSelection: () => void;
@@ -11,6 +13,7 @@ interface BulkActionBarProps {
 }
 
 export default function BulkActionBar({
+  channel,
   selectedCount,
   hasGroupSelected,
   onClearSelection,
@@ -21,6 +24,7 @@ export default function BulkActionBar({
 }: BulkActionBarProps) {
   const [showMore, setShowMore] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
+  const channelCap = getCapability((channel || 'zalo') as Channel);
 
   useEffect(() => {
     if (!showMore) return;
@@ -40,13 +44,15 @@ export default function BulkActionBar({
       <div className="w-px h-5 bg-gray-600 flex-shrink-0" />
 
       {/* Thêm vào chiến dịch */}
-      <button onClick={onAddToCampaign}
-        className="flex items-center gap-1.5 text-xs text-gray-300 hover:text-white px-2 py-1.5 rounded-lg hover:bg-gray-700 transition-colors whitespace-nowrap">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
-        </svg>
-        Thêm vào chiến dịch
-      </button>
+      {channelCap.supportsCampaigns && (
+        <button onClick={onAddToCampaign}
+          className="flex items-center gap-1.5 text-xs text-gray-300 hover:text-white px-2 py-1.5 rounded-lg hover:bg-gray-700 transition-colors whitespace-nowrap">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+          </svg>
+          Thêm vào chiến dịch
+        </button>
+      )}
 
       {/* Nhãn Local */}
       <button onClick={onBulkTagLocal}
@@ -80,15 +86,17 @@ export default function BulkActionBar({
         {showMore && (
           <div className="absolute bottom-full mb-2 right-0 bg-gray-800 border border-gray-600 rounded-xl shadow-2xl py-1 w-48 z-50">
             {/* Nhãn Zalo */}
-            <button
-              onClick={() => { setShowMore(false); onBulkTagZalo(); }}
-              className="w-full flex items-center gap-2.5 px-4 py-2.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors text-left">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-                <line x1="7" y1="7" x2="7.01" y2="7"/>
-              </svg>
-              Nhãn Zalo
-            </button>
+            {channelCap.supportsLabel && (
+              <button
+                onClick={() => { setShowMore(false); onBulkTagZalo(); }}
+                className="w-full flex items-center gap-2.5 px-4 py-2.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors text-left">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+                  <line x1="7" y1="7" x2="7.01" y2="7"/>
+                </svg>
+                Nhãn Zalo
+              </button>
+            )}
 
             {/* Rời nhóm — chỉ hiện khi có nhóm được chọn */}
             {hasGroupSelected && onBulkLeaveGroup && (

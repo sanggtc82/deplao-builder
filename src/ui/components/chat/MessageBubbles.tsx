@@ -86,7 +86,7 @@ function isFileType(msgType: string, content: string): boolean {
 }
 
 function isStickerType(msgType: string): boolean {
-  return msgType === 'chat.sticker';
+  return msgType === 'chat.sticker' || msgType === 'sticker';
 }
 
 function isRtfMsg(msgType: string, content: string): boolean {
@@ -135,11 +135,11 @@ function isMediaType(msgType: string, content: string): boolean {
 }
 
 function isVideoType(msgType: string): boolean {
-  return msgType === 'chat.video.msg';
+  return msgType === 'chat.video.msg' || msgType === 'video';
 }
 
 function isVoiceType(msgType: string): boolean {
-  return msgType === 'chat.voice';
+  return msgType === 'chat.voice' || msgType === 'audio';
 }
 
 // ── RTF style constants ───────────────────────────────────────────────────────
@@ -167,6 +167,47 @@ function StickerBubble({ msg }: { msg: any }) {
   React.useEffect(() => {
     let cancelled = false;
 
+    // ── Facebook sticker: check local_paths trước (giống MediaBubble) ─
+    if (msg.channel === 'facebook') {
+      // Kiểm tra local file trước (đã được download từ main process)
+      try {
+        const lp: Record<string, string> = typeof msg.local_paths === 'string'
+          ? JSON.parse(msg.local_paths || '{}') : (msg.local_paths || {});
+        const localFile = lp.main || (Object.values(lp)[0] as string) || '';
+        if (localFile) {
+          const localUrl = toLocalMediaUrl(localFile);
+          if (localUrl) {
+            setFailed(false);
+            setStickerUrl(localUrl);
+            return;
+          }
+        }
+      } catch {}
+
+      // E2EE sticker: kiểm tra xem có directPath để download không
+      try {
+        const atts = JSON.parse(msg.attachments || '[]');
+        const hasDirectPath = atts[0]?.directPath;
+        const hasUrl = atts[0]?.url;
+        if (msg.isE2EE && !hasDirectPath && !hasUrl) {
+          console.log(`[StickerBubble] E2EE sticker without URL/directPath — bridge limitation, marking unsupported`);
+          if (!cancelled) setUnsupported(true);
+          return;
+        }
+        // Có directPath → đang chờ main process download → giữ loading state
+        if (msg.isE2EE && hasDirectPath && !stickerUrl) {
+          // Loading state sẽ tự động chuyển khi event:localPath cập nhật local_paths
+        }
+      } catch {}
+
+      // Không có local file → URL từ FB CDN cần auth nên không thử load trực tiếp.
+      // Khi main process download xong, event:localPath sẽ cập nhật store
+      // → component re-render → tìm thấy local_paths → hiển thị sticker.
+      if (!cancelled && !stickerUrl) setFailed(true);
+      return;
+    }
+
+    // ── Zalo sticker: từ content JSON ─────────────────────────────────
     // Try direct URL from content first
     try {
       const c = JSON.parse(msg.content || '{}');
@@ -229,7 +270,7 @@ function StickerBubble({ msg }: { msg: any }) {
     };
     load();
     return () => { cancelled = true; };
-  }, [msg.content]);
+  }, [msg.content, msg.local_paths, msg.attachments]);
 
   if (unsupported) {
     return (
@@ -369,6 +410,7 @@ function MediaBubble({ msg, isSelf, onView }: { msg: any; isSelf: boolean; onVie
 
 // ── VideoBubble ───────────────────────────────────────────────────────────────
 function VideoBubble({ msg }: { msg: any }) {
+  const [showPlayer, setShowPlayer] = React.useState(false);
   let remoteThumb = '';
   let videoLocalPath = '';
   let thumbLocalPath = '';
@@ -379,8 +421,27 @@ function VideoBubble({ msg }: { msg: any }) {
   try {
     const lp: Record<string, string> = typeof msg.local_paths === 'string'
       ? JSON.parse(msg.local_paths || '{}') : (msg.local_paths || {});
-    thumbLocalPath = lp.thumb || lp.main || '';
-    videoLocalPath = lp.file || lp.video || '';
+    const isFbVideo = msg.channel === 'facebook';
+    // For Facebook E2EE: lp.main IS the video file, not a thumbnail
+    thumbLocalPath = lp.thumb || (isFbVideo ? '' : lp.main) || '';
+    videoLocalPath = lp.file || lp.video || (isFbVideo ? lp.main : '') || '';
+    // Fallback: read video from attachments when local_paths not populated
+    if (!videoLocalPath && isFbVideo) {
+      try {
+        const atts = JSON.parse(msg.attachments || '[]');
+        if (atts[0]?.localPath) videoLocalPath = atts[0].localPath;
+      } catch {}
+    }
+
+    console.log('[VideoBubble] DEBUG', {
+      channel: msg.channel,
+      msg_id: msg.msg_id,
+      local_paths: msg.local_paths,
+      thumbLocalPath,
+      videoLocalPath,
+      lp,
+      attachments_raw: msg.attachments,
+    });
   } catch {}
 
   try {
@@ -398,14 +459,33 @@ function VideoBubble({ msg }: { msg: any }) {
   const displayHeight = Math.min(200, Math.round(280 / aspectRatio));
   const formatDur = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
-  const handlePlay = async (e: React.MouseEvent) => {
+  const videoUrl = videoLocalPath ? toLocalMediaUrl(videoLocalPath) : '';
+
+  // Zalo: open in external player on click. Facebook: inline video player.
+  const handlePlay = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (videoLocalPath) await ipc.file?.openPath(videoLocalPath);
+    if (msg.channel === 'facebook' && videoUrl) {
+      setShowPlayer(true);
+    } else if (videoLocalPath) {
+      ipc.file?.openPath(videoLocalPath);
+    }
   };
+
+  // Inline Facebook video player
+  if (showPlayer && msg.channel === 'facebook' && videoUrl) {
+    return (
+      <div className="rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.12]"
+        style={{ width: '17.5rem', maxHeight: '25rem' }}>
+        <video src={videoUrl} controls autoPlay
+          className="w-full" style={{ maxHeight: '25rem' }}
+          onError={() => setShowPlayer(false)} />
+      </div>
+    );
+  }
 
   return (
     <div className="relative group/video cursor-pointer rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.12]"
-      style={{ width: 280, height: displayHeight || 160 }} onClick={handlePlay}>
+      style={{ width: '17.5rem', height: displayHeight || 160 }} onClick={handlePlay}>
       {thumbUrl
         ? <img src={thumbUrl} alt="video" className="w-full h-full object-cover"
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
@@ -426,7 +506,7 @@ function VideoBubble({ msg }: { msg: any }) {
           <span className="text-[11px] text-white font-medium bg-black/50 px-1.5 py-0.5 rounded">{formatDur(duration)}</span>
         )}
         {isHD && <span className="text-[11px] text-white font-bold bg-blue-600/70 px-1.5 py-0.5 rounded">HD</span>}
-        {!videoLocalPath && <span className="text-[11px] text-yellow-300 bg-black/50 px-1.5 py-0.5 rounded">Đang tải...</span>}
+        {!videoLocalPath && !videoUrl && <span className="text-[11px] text-yellow-300 bg-black/50 px-1.5 py-0.5 rounded">Đang tải...</span>}
       </div>
     </div>
   );
@@ -461,6 +541,14 @@ function VoiceBubble({ msg, isSelf }: { msg: any; isSelf: boolean }) {
     try {
       const lp = typeof msg.local_paths === 'string' ? JSON.parse(msg.local_paths || '{}') : (msg.local_paths || {});
       _localPath = lp.file || lp.voice || lp.main || '';
+
+      // Facebook: read audio path from attachments when local_paths not populated
+      if (!_localPath && msg.channel === 'facebook') {
+        try {
+          const atts = JSON.parse(msg.attachments || '[]');
+          if (atts[0]?.localPath) _localPath = atts[0].localPath;
+        } catch {}
+      }
     } catch {}
 
     return { voiceUrl: _voiceUrl, paramsDurationSec: _paramsDur, localPath: _localPath };
@@ -561,7 +649,7 @@ function VoiceBubble({ msg, isSelf }: { msg: any; isSelf: boolean }) {
                 <div
                   key={i}
                   className={`rounded-full transition-colors duration-100 ${filled ? 'bg-white' : 'bg-white/30'}`}
-                  style={{ width: 2, height: h * 1.5, minHeight: 3 }}
+                  style={{ width: '0.125rem', height: h * 1.5, minHeight: '0.1875rem' }}
                 />
               );
             })}

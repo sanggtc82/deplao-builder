@@ -18,6 +18,7 @@ const PLATFORMS = [
   { value: 'deepseek', label: 'DeepSeek',        icon: '🔮', color: 'bg-purple-600' },
   { value: 'grok',     label: 'Grok (xAI)',      icon: '⚡', color: 'bg-orange-600' },
   { value: 'mistral',  label: 'Mistral AI',      icon: '🌀', color: 'bg-sky-600' },
+  { value: '9router',  label: '9Router Proxy',   icon: '🔀', color: 'bg-cyan-600' },
 ] as const;
 
 const MODELS_BY_PLATFORM: Record<string, { value: string; label: string }[]> = {
@@ -69,6 +70,19 @@ const MODELS_BY_PLATFORM: Record<string, { value: string; label: string }[]> = {
     { value: 'mistral-medium-latest',   label: 'Mistral Medium (cân bằng)' },
     { value: 'open-mistral-nemo-2',     label: 'Mistral Nemo 2 (mở, nhẹ)' },
     { value: 'mistral-large-latest',    label: 'Mistral Large (legacy)' },
+  ],
+  '9router': [
+    { value: 'kr/claude-sonnet-4.5',       label: 'Kiro: Claude 4.5 Sonnet (free)' },
+    { value: 'kr/claude-opus-4.6',         label: 'Kiro: Claude Opus 4.6 (free)' },
+    { value: 'kr/glm-5',                   label: 'Kiro: GLM-5 (free)' },
+    { value: 'kr/minimax',                 label: 'Kiro: MiniMax (free)' },
+    { value: 'oc/<auto>',                  label: 'OpenCode Free (auto, free)' },
+    { value: 'glm/glm-4.7',                label: 'GLM-4.7 ($0.6/1M)' },
+    { value: 'minimax/minimax',            label: 'MiniMax ($0.2/1M)' },
+    { value: 'kimi/kimi-k2-thinking',      label: 'Kimi K2 Thinking (free)' },
+    { value: 'vertex/<auto>',              label: 'Vertex AI (auto, $300 free)' },
+    { value: 'cc/claude-opus-4-6',         label: 'Claude Code subscription' },
+    { value: 'openrouter/<model>',         label: 'OpenRouter (tùy chọn)' },
   ],
 };
 
@@ -185,6 +199,7 @@ export default function AIAssistantDetailPage({ assistantId, onBack }: Props) {
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [model, setModel] = useState('gpt-5.4-mini');
+  const [baseUrl, setBaseUrl] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [posIntegrationId, setPosIntegrationId] = useState('');
   const [maxTokens, setMaxTokens] = useState(1000);
@@ -266,6 +281,7 @@ export default function AIAssistantDetailPage({ assistantId, onBack }: Props) {
           setPlatform(a.platform || 'openai');
           setApiKey(a.apiKey || '');
           setModel(a.model || 'gpt-5.4-mini');
+          setBaseUrl(a.baseUrl || '');
           setSystemPrompt(a.systemPrompt || '');
           setPosIntegrationId(a.posIntegrationId || '');
           try { setPinnedProducts(JSON.parse(a.pinnedProductsJson || '[]')); } catch { setPinnedProducts([]); }
@@ -315,6 +331,7 @@ export default function AIAssistantDetailPage({ assistantId, onBack }: Props) {
         platform,
         apiKey: apiKey || '***',
         model,
+        baseUrl: baseUrl.trim() || null,
         systemPrompt: systemPrompt.trim(),
         posIntegrationId: posIntegrationId || null,
         pinnedProductsJson: JSON.stringify(pinnedProducts),
@@ -651,7 +668,30 @@ export default function AIAssistantDetailPage({ assistantId, onBack }: Props) {
                 {platform === 'deepseek' && 'Lấy tại: platform.deepseek.com/api-keys'}
                 {platform === 'grok' && 'Lấy tại: console.x.ai'}
                 {platform === 'mistral' && 'Lấy tại: console.mistral.ai/api-keys'}
+                {platform === '9router' && 'Lấy từ dashboard 9router tại http://localhost:20128/settings'}
               </p>
+              {platform === '9router' && (
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.dispatchEvent(new CustomEvent('nav:settings', {
+                        detail: { tab: 'introduction', subtab: '9router' },
+                      }));
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/30 border border-cyan-600/40 transition-colors"
+                  >
+                    📖 Hướng dẫn tích hợp 9Router
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => ipc.shell?.openExternal('http://localhost:20128')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
+                  >
+                    🔗 Mở Dashboard 9Router
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -920,6 +960,17 @@ export default function AIAssistantDetailPage({ assistantId, onBack }: Props) {
                 </p>
               </div>
 
+              {/* Base URL override */}
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Base URL (tuỳ chọn)</label>
+                <input type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
+                  placeholder={platform === '9router' ? 'http://localhost:20128' : 'https://api.custom-proxy.com'}
+                  className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"/>
+                <p className="text-[10px] text-gray-500 mt-1">
+                  Ghi đè endpoint API. Để trống để dùng URL mặc định. Hữu ích khi dùng proxy như 9Router, OpenRouter, hoặc các API gateway khác.
+                </p>
+              </div>
+
               {/* Default toggle */}
               <label className="flex items-center gap-3 cursor-pointer py-1">
                 <div className={`relative w-10 h-5 rounded-full transition-colors ${isDefault ? 'bg-blue-600' : 'bg-gray-600'}`}
@@ -1065,7 +1116,7 @@ export default function AIAssistantDetailPage({ assistantId, onBack }: Props) {
                   placeholder="Nhập tin nhắn thử..."
                   rows={1}
                   className="flex-1 bg-transparent text-sm text-white placeholder-gray-500 resize-none outline-none max-h-20 overflow-y-auto"
-                  style={{ minHeight: '24px' }}
+                  style={{ minHeight: '1.5rem' }}
                 />
                 <button onClick={handleChatSend} disabled={chatLoading || !chatInput.trim()}
                   className="w-7 h-7 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 flex items-center justify-center text-white transition-colors flex-shrink-0">

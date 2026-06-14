@@ -144,7 +144,7 @@ const Hero: React.FC = () => {
 					</div>
 
 					<h1 className="aos-element delay-1 mb-5 max-w-[12ch] text-4xl font-black leading-[0.98] tracking-tight text-slate-950 sm:max-w-[14ch] sm:text-5xl lg:text-7xl">
-						Quản lý Zalo chuyên nghiệp <span className="gradient-text">Đa tài khoản, CRM, Workflow và  AI Assistant</span>
+						Quản lý Zalo & Facebook chuyên nghiệp <span className="gradient-text">Đa tài khoản, CRM, Workflow và  AI Assistant</span>
 					</h1>
 
 					<p className="aos-element delay-2 mb-7 max-w-2xl text-base leading-relaxed text-slate-600 sm:text-md md:text-md">

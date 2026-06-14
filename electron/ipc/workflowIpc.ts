@@ -11,10 +11,6 @@ function normalizeWorkflowChannel(channel?: string): WorkflowChannel {
     return channel === 'facebook' ? 'facebook' : 'zalo';
 }
 
-function hasUnsupportedWorkflowNodes(nodes: any[] = []): boolean {
-    return nodes.some((node: any) => typeof node?.type === 'string' && node.type.startsWith('fb.'));
-}
-
 function rowToWorkflow(r: any): Workflow {
     const pageIdsRaw: string = r.page_ids || r.page_id || '';
     const pageIds = pageIdsRaw.split(',').filter(Boolean);
@@ -98,12 +94,6 @@ export function registerWorkflowIpc(): void {
                 ? workflow.pageIds.filter(Boolean)
                 : (workflow.pageId ? [workflow.pageId] : []);
             const channel = normalizeWorkflowChannel((workflow as any).channel);
-            if (channel !== 'zalo') {
-                return { success: false, error: 'Workflow Facebook hiện chưa hỗ trợ tạo hoặc lưu.' };
-            }
-            if (hasUnsupportedWorkflowNodes(workflow.nodes || [])) {
-                return { success: false, error: 'Workflow chứa node Facebook chưa được hỗ trợ ở phiên bản hiện tại.' };
-            }
             const wf: Workflow = {
                 id: workflow.id || uuidv4(),
                 name: workflow.name || 'Workflow mới',
@@ -146,12 +136,7 @@ export function registerWorkflowIpc(): void {
                 const row = DatabaseService.getInstance().getWorkflowById(id);
                 if (!row) return { success: false, error: 'Not found' };
                 const wf = rowToWorkflow(row);
-                if (wf.channel !== 'zalo') {
-                    return { success: false, error: 'Workflow Facebook hiện chưa hỗ trợ chạy.' };
-                }
-                if (hasUnsupportedWorkflowNodes(wf.nodes)) {
-                    return { success: false, error: 'Workflow chứa node Facebook chưa được hỗ trợ chạy.' };
-                }
+                // FB workflows are now supported — no channel check needed
             }
             DatabaseService.getInstance().toggleWorkflow(id, enabled);
             DatabaseService.getInstance().save();
@@ -181,8 +166,8 @@ export function registerWorkflowIpc(): void {
             const row = DatabaseService.getInstance().getWorkflowById(id);
             if (!row) return { success: false, error: 'Không tìm thấy workflow gốc' };
             const wf = rowToWorkflow(row);
-            if (wf.channel !== 'zalo' || hasUnsupportedWorkflowNodes(wf.nodes)) {
-                return { success: false, error: 'Chỉ có thể nhân bản workflow Zalo ở phiên bản hiện tại.' };
+            if (wf.channel !== 'zalo' && wf.channel !== 'facebook') {
+                return { success: false, error: 'Chỉ có thể nhân bản workflow Zalo hoặc Facebook ở phiên bản hiện tại.' };
             }
             const newId = DatabaseService.getInstance().cloneWorkflow(id, targetZaloId);
             if (!newId) return { success: false, error: 'Không tìm thấy workflow gốc' };

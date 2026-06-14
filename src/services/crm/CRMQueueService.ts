@@ -26,6 +26,7 @@ class CRMQueueService {
     private readonly REFILL_INTERVAL_MS = 60 * 1000;  // 1 phút / token → 60/giờ
     private readonly CHECK_INTERVAL_MS = 5000;          // kiểm tra mỗi 5s
     private readonly MIN_DELAY_MS = 30 * 1000;          // tối thiểu 30s
+    private readonly PHONE_RESOLVE_TIMEOUT_MS = 15_000; // timeout resolve phone → tránh treo vô hạn
 
     public static getInstance(): CRMQueueService {
         if (!CRMQueueService.instance) CRMQueueService.instance = new CRMQueueService();
@@ -133,26 +134,31 @@ class CRMQueueService {
 
         // ── Daily send limit check ──────────────────────────────────────
         const campaignData = db.getCRMCampaign(item.campaign_id);
-        if (campaignData && campaignData.daily_send_limit && campaignData.daily_send_limit > 0) {
-            const dailyCount = db.getDailySentCountForCampaign(item.campaign_id);
-            if (dailyCount >= campaignData.daily_send_limit) {
-                // Daily limit reached — pause this campaign for today
-                this.dailyPausedCampaigns.set(item.campaign_id, true);
-                Logger.log(`[CRMQueue] Campaign ${item.campaign_id} daily limit reached: ${dailyCount}/${campaignData.daily_send_limit}`);
-                this.broadcastStatus(zaloId, 'daily_limit_reached');
-                return;
-            }
-            // If some contacts sent today but not yet past daily_start_time, wait
-            // First day exemption: dailyCount === 0 → run immediately
-            if (dailyCount > 0) {
-                const now = new Date();
-                const [hh, mm] = (campaignData.daily_start_time || '08:00').split(':').map(Number);
-                const todayStartTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh || 8, mm || 0, 0);
+
+        // ── Daily start time (tách riêng, không phụ thuộc daily_send_limit) ──
+        // Nếu daily_start_time đã qua hôm nay → chạy luôn
+        // Nếu chưa đến → đợi
+        if (campaignData && campaignData.daily_start_time) {
+            const now = new Date();
+            const [hh, mm] = campaignData.daily_start_time.split(':').map(Number);
+            if (!isNaN(hh) && !isNaN(mm)) {
+                const todayStartTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0);
                 if (now < todayStartTime) {
                     Logger.log(`[CRMQueue] Campaign ${item.campaign_id}: before daily start time ${campaignData.daily_start_time}`);
                     this.broadcastStatus(zaloId, 'waiting_for_start_time');
                     return;
                 }
+            }
+        }
+
+        // ── Daily limit (chỉ áp dụng nếu có giới hạn) ───────────────────
+        if (campaignData && campaignData.daily_send_limit && campaignData.daily_send_limit > 0) {
+            const dailyCount = db.getDailySentCountForCampaign(item.campaign_id);
+            if (dailyCount >= campaignData.daily_send_limit) {
+                this.dailyPausedCampaigns.set(item.campaign_id, true);
+                Logger.log(`[CRMQueue] Campaign ${item.campaign_id} daily limit reached: ${dailyCount}/${campaignData.daily_send_limit}`);
+                this.broadcastStatus(zaloId, 'daily_limit_reached');
+                return;
             }
             this.dailyPausedCampaigns.delete(item.campaign_id);
         }
@@ -170,187 +176,185 @@ class CRMQueueService {
             return;
         }
 
+        // ── Bắt đầu processing ──────────────────────────────────────────────
+        // Đặt isProcessing bên ngoài try, nhưng sẽ reset trong finally
         this.isProcessing.set(zaloId, true);
-        db.updateCampaignContactStatus(item.id!, 'sending');
 
-        // ── Phone resolution at send time ────────────────────────────────────
-        // If contact_id is a phone placeholder (from by_phone import), resolve now
+        // Khai báo tất cả vars ở đây để catch block có thể truy cập
         let effectiveContactId = item.contact_id;
         let effectiveDisplayName = item.display_name || '';
-        if (item.contact_id.startsWith('phone:')) {
-            const phone = item.contact_id.slice(6); // strip "phone:" prefix
-            Logger.log(`[CRMQueue] Resolving phone ${phone} at send time...`);
-            const resolved = await this.resolvePhoneContact(phone, conn.api);
-            if (!resolved) {
-                Logger.warn(`[CRMQueue] Phone ${phone} not found on Zalo, marking failed`);
-                db.updateCampaignContactStatus(item.id!, 'failed', 'Không tìm thấy SĐT trên Zalo');
-                db.save();
-                this.broadcastProgress(zaloId, item.campaign_id, item.contact_id, 'failed', 'Không tìm thấy SĐT trên Zalo');
-                this.isProcessing.set(zaloId, false);
-                return;
-            }
-            effectiveContactId = resolved.uid;
-            effectiveDisplayName = resolved.name;
-            // Update the DB record so we don't resolve again on retry
-            try {
-                db.updateCampaignContactId(item.id!, resolved.uid, resolved.name);
-            } catch { /* non-critical */ }
-            Logger.log(`[CRMQueue] Phone ${phone} → UID ${resolved.uid} (${resolved.name})`);
-        }
-
-        // ── UID resolution at send time ────────────────────────────────────────
-        // If display_name is empty and contact_id looks like a numeric UID (from by_uid import),
-        // fetch user info via API to populate the display name
-        if (!effectiveDisplayName && /^\d{5,}$/.test(effectiveContactId)) {
-            Logger.log(`[CRMQueue] Resolving UID ${effectiveContactId} via getUserInfo...`);
-            try {
-                const infoRes = await (conn.api as any).getUserInfo(effectiveContactId);
-                const profile = infoRes?.response?.changed_profiles?.[effectiveContactId]
-                    ?? infoRes?.changed_profiles?.[effectiveContactId];
-                if (profile) {
-                    effectiveDisplayName = profile.displayName || profile.zaloName || profile.name || '';
-                }
-                if (effectiveDisplayName) {
-                    // Update DB so we don't resolve again on retry
-                    try {
-                        db.updateCampaignContactId(item.id!, effectiveContactId, effectiveDisplayName);
-                    } catch { /* non-critical */ }
-                    Logger.log(`[CRMQueue] UID ${effectiveContactId} → "${effectiveDisplayName}"`);
-                } else {
-                    Logger.warn(`[CRMQueue] UID ${effectiveContactId}: getUserInfo returned no name`);
-                }
-            } catch (uidErr: any) {
-                Logger.warn(`[CRMQueue] UID ${effectiveContactId} getUserInfo failed: ${uidErr.message}`);
-            }
-        }
-
-        // Substitute template variables in a message string
-        const substitute = (tpl: string) =>
-            (tpl || '')
-                .replace(/\{name\}/g, effectiveDisplayName || item.contact_id)
-                .replace(/\{userId\}/g, effectiveContactId);
-
-        const campaignType: string = (item as any).campaign_type || 'message';
-        const isGroup: boolean = (item as any).contact_type === 'group';
-        const friendMsg = substitute((item as any).friend_request_message || '') || substitute(item.template_message || '') || 'Xin chào!';
-
-        // Parse mixed_config for new-style mixed campaigns
-        let mixedConfig: { actions?: string[]; group_ids?: string[] } = {};
-        try { mixedConfig = JSON.parse((item as any).mixed_config || '{}'); } catch {}
-        const mixedActions: string[] = mixedConfig.actions || [];
-        const mixedGroupIds: string[] = mixedConfig.group_ids || [];
-
-        // ── Multi-block template support ──────────────────────────────────────
-        // template_message may be JSON { mode, blocks } or legacy plain string
-        type ContentBlock = { id: string; text: string; images: string[] };
-
-        const parseContentBlocks = (raw: string): { blocks: ContentBlock[]; mode: 'random' | 'all' } => {
-            try {
-                const p = JSON.parse(raw);
-                if (p && Array.isArray(p.blocks)) return { blocks: p.blocks as ContentBlock[], mode: p.mode === 'all' ? 'all' : 'random' };
-            } catch {}
-            return { blocks: [{ id: '', text: raw, images: [] }], mode: 'random' };
-        };
-
-        const { blocks: allBlocks, mode: sendMode } = parseContentBlocks(item.template_message || '');
-
-        // Select which blocks to send
-        let blocksToSend: ContentBlock[];
-        if (sendMode === 'random') {
-            const idx = allBlocks.length > 0 ? Math.floor(Math.random() * allBlocks.length) : 0;
-            blocksToSend = allBlocks.length > 0 ? [allBlocks[idx]] : [];
-        } else {
-            blocksToSend = allBlocks;
-        }
-
-        // Helper: send one block (text + images) to a target, returns collected API responses
-        const sendBlock = async (block: ContentBlock, threadId: string, threadType: number): Promise<any[]> => {
-            const responses: any[] = [];
-            const text = substitute(block.text || '');
-            if (text.trim()) {
-                const resp = await (conn.api as any).sendMessage({ msg: text }, threadId, threadType);
-                responses.push(resp);
-            }
-            const imgs = (block.images || []).filter(Boolean);
-            if (imgs.length > 0) {
-                await new Promise(r => setTimeout(r, 500));
-                // Build attachments — read each image file from disk
-                const attachments: any[] = [];
-                for (const filePath of imgs) {
-                    try {
-                        const buffer = fs.readFileSync(filePath);
-                        const baseName = path.basename(filePath);
-                        const ext = path.extname(baseName) || '.jpg';
-                        const safeFilename = (path.extname(baseName) ? baseName : `${baseName}${ext}`) as `${string}.${string}`;
-                        let width = 0, height = 0;
-                        try { const dim = imageSize(buffer); width = dim.width ?? 0; height = dim.height ?? 0; } catch {}
-                        attachments.push({ data: buffer, filename: safeFilename, metadata: { totalSize: buffer.length, width, height } });
-                    } catch (readErr: any) {
-                        Logger.error(`[CRMQueue] Image read failed: ${filePath} → ${readErr.message}`);
-                        throw new Error(`Không đọc được ảnh: ${filePath} — ${readErr.message}`);
-                    }
-                }
-                if (attachments.length > 0) {
-                    const resp = await (conn.api as any).sendMessage({ msg: '', attachments }, threadId, threadType);
-                    responses.push(resp);
-                }
-            }
-            return responses;
-        };
-
-        // Legacy single-message string for log display
-        // Include image indicator when block has images but no text
-        const firstBlock = blocksToSend[0];
-        const firstBlockText = firstBlock ? substitute(firstBlock.text || '') : '';
-        const firstBlockImgCount = firstBlock?.images?.filter(Boolean).length || 0;
-        const message = firstBlockText.trim()
-          ? firstBlockText + (firstBlockImgCount > 0 ? ` + ${firstBlockImgCount} ảnh` : '')
-          : firstBlockImgCount > 0
-            ? `[${firstBlockImgCount} ảnh]`
-            : '(trống)';
-
-        // Helper: describe block content for log (text + image count)
-        const describeBlock = (block: ContentBlock): string => {
-            const txt = substitute(block.text || '').trim();
-            const imgCount = (block.images || []).filter(Boolean).length;
-            if (txt && imgCount > 0) return `${txt} + ${imgCount} ảnh`;
-            if (txt) return txt;
-            if (imgCount > 0) return `[${imgCount} ảnh]`;
-            return '(trống)';
-        };
-
-        // Common log base fields
-        const logBase = {
-            owner_zalo_id: zaloId,
-            contact_id: effectiveContactId,
-            display_name: effectiveDisplayName || '',
-            phone: (item as any).phone || '',
-            contact_type: isGroup ? 'group' : 'user',
-            campaign_id: item.campaign_id,
-            sent_at: Date.now(),
-        };
-
-        // Helper: send multiple blocks with per-block error catching and 1s delay
-        const sendBlocks = async (blocks: ContentBlock[], threadId: string, threadType: number): Promise<{ sent: number; errors: string[]; responses: any[] }> => {
-            let sent = 0;
-            const errors: string[] = [];
-            const responses: any[] = [];
-            for (let bi = 0; bi < blocks.length; bi++) {
-                if (bi > 0) await new Promise(r => setTimeout(r, 1000));
-                try {
-                    const resps = await sendBlock(blocks[bi], threadId, threadType);
-                    responses.push(...resps);
-                    sent++;
-                } catch (blockErr: any) {
-                    const errMsg = blockErr?.message || String(blockErr);
-                    errors.push(errMsg);
-                    Logger.error(`[CRMQueue] Block ${bi + 1}/${blocks.length} failed for ${threadId}: ${errMsg}`);
-                }
-            }
-            return { sent, errors, responses };
-        };
+        let campaignType: string = 'message';
+        let isGroup: boolean = false;
+        let friendMsg = '';
+        let mixedActions: string[] = [];
+        let mixedGroupIds: string[] = [];
+        let blocksToSend: any[] = [];
+        let sendMode: 'random' | 'all' = 'random';
+        let message = '';
+        let logBase: any = {};
+        let describeBlock: (b: any) => string = () => '';
+        let substitute: (tpl: string) => string = (t) => t;
 
         try {
+            db.updateCampaignContactStatus(item.id!, 'sending');
+
+            // ── Phone resolution at send time ──────────────────────────────
+            if (item.contact_id.startsWith('phone:')) {
+                const phone = item.contact_id.slice(6);
+                Logger.log(`[CRMQueue] Resolving phone ${phone} at send time...`);
+                const resolved = await this.resolvePhoneContact(phone, conn.api);
+                if (!resolved) {
+                    Logger.warn(`[CRMQueue] Phone ${phone} not found on Zalo, marking failed`);
+                    db.updateCampaignContactStatus(item.id!, 'failed', 'Không tìm thấy SĐT trên Zalo');
+                    db.save();
+                    this.broadcastProgress(zaloId, item.campaign_id, item.contact_id, 'failed', 'Không tìm thấy SĐT trên Zalo');
+                    this.isProcessing.set(zaloId, false);
+                    return;
+                }
+                effectiveContactId = resolved.uid;
+                effectiveDisplayName = resolved.name;
+                try { db.updateCampaignContactId(item.id!, resolved.uid, resolved.name); } catch { /* non-critical */ }
+                Logger.log(`[CRMQueue] Phone ${phone} → UID ${resolved.uid} (${resolved.name})`);
+            }
+
+            // ── UID resolution at send time ────────────────────────────────
+            if (!effectiveDisplayName && /^\d{5,}$/.test(effectiveContactId)) {
+                Logger.log(`[CRMQueue] Resolving UID ${effectiveContactId} via getUserInfo...`);
+                try {
+                    const infoRes = await (conn.api as any).getUserInfo(effectiveContactId);
+                    const profile = infoRes?.response?.changed_profiles?.[effectiveContactId]
+                        ?? infoRes?.changed_profiles?.[effectiveContactId];
+                    if (profile) effectiveDisplayName = profile.displayName || profile.zaloName || profile.name || '';
+                    if (effectiveDisplayName) {
+                        try { db.updateCampaignContactId(item.id!, effectiveContactId, effectiveDisplayName); } catch { /* */ }
+                        Logger.log(`[CRMQueue] UID ${effectiveContactId} → "${effectiveDisplayName}"`);
+                    } else Logger.warn(`[CRMQueue] UID ${effectiveContactId}: getUserInfo returned no name`);
+                } catch (uidErr: any) {
+                    Logger.warn(`[CRMQueue] UID ${effectiveContactId} getUserInfo failed: ${uidErr.message}`);
+                }
+            }
+
+            // ── Template preparation ───────────────────────────────────────
+            substitute = (tpl: string) =>
+                (tpl || '')
+                    .replace(/\{name\}/g, effectiveDisplayName || item.contact_id)
+                    .replace(/\{userId\}/g, effectiveContactId);
+
+            campaignType = (item as any).campaign_type || 'message';
+            isGroup = (item as any).contact_type === 'group';
+            friendMsg = substitute((item as any).friend_request_message || '') || substitute(item.template_message || '') || 'Xin chào!';
+
+            let mixedConfig: { actions?: string[]; group_ids?: string[] } = {};
+            try { mixedConfig = JSON.parse((item as any).mixed_config || '{}'); } catch {}
+            mixedActions = mixedConfig.actions || [];
+            mixedGroupIds = mixedConfig.group_ids || [];
+
+            // ── Multi-block template support ───────────────────────────────
+            type ContentBlock = { id: string; text: string; images: string[] };
+            const parseContentBlocks = (raw: string): { blocks: ContentBlock[]; mode: 'random' | 'all' } => {
+                try {
+                    const p = JSON.parse(raw);
+                    if (p && Array.isArray(p.blocks)) return { blocks: p.blocks as ContentBlock[], mode: p.mode === 'all' ? 'all' : 'random' };
+                } catch {}
+                return { blocks: [{ id: '', text: raw, images: [] }], mode: 'random' };
+            };
+
+            const { blocks: allBlocks, mode: parsedMode } = parseContentBlocks(item.template_message || '');
+            sendMode = parsedMode;
+
+            if (sendMode === 'random') {
+                const idx = allBlocks.length > 0 ? Math.floor(Math.random() * allBlocks.length) : 0;
+                blocksToSend = allBlocks.length > 0 ? [allBlocks[idx]] : [];
+            } else {
+                blocksToSend = allBlocks;
+            }
+
+            // Helper: send one block (text + images)
+            const sendBlock = async (block: ContentBlock, threadId: string, threadType: number): Promise<any[]> => {
+                const responses: any[] = [];
+                const text = substitute(block.text || '');
+                if (text.trim()) {
+                    const resp = await (conn.api as any).sendMessage({ msg: text }, threadId, threadType);
+                    responses.push(resp);
+                }
+                const imgs = (block.images || []).filter(Boolean);
+                if (imgs.length > 0) {
+                    await new Promise(r => setTimeout(r, 500));
+                    const attachments: any[] = [];
+                    for (const filePath of imgs) {
+                        try {
+                            const buffer = fs.readFileSync(filePath);
+                            const baseName = path.basename(filePath);
+                            const ext = path.extname(baseName) || '.jpg';
+                            const safeFilename = (path.extname(baseName) ? baseName : `${baseName}${ext}`) as `${string}.${string}`;
+                            let width = 0, height = 0;
+                            try { const dim = imageSize(buffer); width = dim.width ?? 0; height = dim.height ?? 0; } catch {}
+                            attachments.push({ data: buffer, filename: safeFilename, metadata: { totalSize: buffer.length, width, height } });
+                        } catch (readErr: any) {
+                            Logger.error(`[CRMQueue] Image read failed: ${filePath} → ${readErr.message}`);
+                            throw new Error(`Không đọc được ảnh: ${filePath} — ${readErr.message}`);
+                        }
+                    }
+                    if (attachments.length > 0) {
+                        const resp = await (conn.api as any).sendMessage({ msg: '', attachments }, threadId, threadType);
+                        responses.push(resp);
+                    }
+                }
+                return responses;
+            };
+
+            // Legacy single-message string for log display
+            const firstBlock = blocksToSend[0];
+            const firstBlockText = firstBlock ? substitute(firstBlock.text || '') : '';
+            const firstBlockImgCount = firstBlock?.images?.filter(Boolean).length || 0;
+            message = firstBlockText.trim()
+              ? firstBlockText + (firstBlockImgCount > 0 ? ` + ${firstBlockImgCount} ảnh` : '')
+              : firstBlockImgCount > 0
+                ? `[${firstBlockImgCount} ảnh]`
+                : '(trống)';
+
+            // Helper: describe block content for log (dùng trong catch)
+            describeBlock = (block: ContentBlock): string => {
+                const txt = substitute(block.text || '').trim();
+                const imgCount = (block.images || []).filter(Boolean).length;
+                if (txt && imgCount > 0) return `${txt} + ${imgCount} ảnh`;
+                if (txt) return txt;
+                if (imgCount > 0) return `[${imgCount} ảnh]`;
+                return '(trống)';
+            };
+
+            // Common log base fields
+            logBase = {
+                owner_zalo_id: zaloId,
+                contact_id: effectiveContactId,
+                display_name: effectiveDisplayName || '',
+                phone: (item as any).phone || '',
+                contact_type: isGroup ? 'group' : 'user',
+                campaign_id: item.campaign_id,
+                sent_at: Date.now(),
+            };
+
+            // Helper: send multiple blocks with per-block error catching
+            const sendBlocks = async (blocks: ContentBlock[], threadId: string, threadType: number): Promise<{ sent: number; errors: string[]; responses: any[] }> => {
+                let sent = 0;
+                const errors: string[] = [];
+                const responses: any[] = [];
+                for (let bi = 0; bi < blocks.length; bi++) {
+                    if (bi > 0) await new Promise(r => setTimeout(r, 1000));
+                    try {
+                        const resps = await sendBlock(blocks[bi], threadId, threadType);
+                        responses.push(...resps);
+                        sent++;
+                    } catch (blockErr: any) {
+                        const errMsg = blockErr?.message || String(blockErr);
+                        errors.push(errMsg);
+                        Logger.error(`[CRMQueue] Block ${bi + 1}/${blocks.length} failed for ${threadId}: ${errMsg}`);
+                    }
+                }
+                return { sent, errors, responses };
+            };
+
+            // ── Actual send logic ──────────────────────────────────────────
             if (isGroup) {
                 // ── Gửi vào nhóm ─────────────────────────────────────────────────
                 const threadType = 1;
@@ -560,14 +564,21 @@ class CRMQueueService {
      * Returns { uid, name } or null if not found.
      */
     private async resolvePhoneContact(phone: string, api: any): Promise<{ uid: string; name: string } | null> {
+        // Timeout để tránh API treo vô hạn → queue tê liệt
+        /** Helper tạo promise với timeout */
+        const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
+            Promise.race([
+                promise,
+                new Promise<T>((_, reject) => setTimeout(() => reject(new Error('API timeout')), ms)),
+            ]);
         try {
-            const res = await api.findUser(phone);
-            const u = res?.response ?? res;
+            const res: any = await withTimeout(api.findUser(phone), this.PHONE_RESOLVE_TIMEOUT_MS);
+            const u: any = res?.response ?? res;
             if (!u?.uid) return null;
             let name = u.display_name || u.zalo_name || phone;
             try {
-                const infoRes = await api.getUserInfo(u.uid);
-                const profile = infoRes?.response?.changed_profiles?.[u.uid] ?? infoRes?.changed_profiles?.[u.uid];
+                const infoRes: any = await withTimeout(api.getUserInfo(u.uid), this.PHONE_RESOLVE_TIMEOUT_MS);
+                const profile: any = infoRes?.response?.changed_profiles?.[u.uid] ?? infoRes?.changed_profiles?.[u.uid];
                 if (profile) {
                     name = profile.displayName || profile.zaloName || profile.name || name;
                 }

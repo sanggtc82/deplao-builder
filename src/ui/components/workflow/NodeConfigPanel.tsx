@@ -4,6 +4,7 @@ import { useAccountStore } from '@/store/accountStore';
 import { useAppStore } from '@/store/appStore';
 import { getNodeLabel } from './workflowConfig';
 import GroupAvatar from '@/components/common/GroupAvatar';
+import TemplateVarPopup from './TemplateVarPopup';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -22,7 +23,12 @@ interface Field {
   desc?: string;
   /** Ẩn trong mục "Nâng cao" (collapsed mặc định) */
   advanced?: boolean;
-  /** Biến gợi ý — click để chèn vào ô */
+  /**
+   * Biến gợi ý (tên variable, VD: '$trigger.fromName').
+   * Nếu có field này, UI sẽ hiện nút "Chèn biến động" để mở popup
+   * danh sách đầy đủ các variable từ templateVars.ts.
+   * Xem templateVars.ts để biết tất cả variable khả dụng.
+   */
   templateVars?: string[];
   /** Key của field boolean dùng để bật HTML editor (vd: 'isHtml') */
   htmlToggle?: string;
@@ -1508,12 +1514,362 @@ const CONFIG_SCHEMA: Record<string, Field[]> = {
       templateVars: ['$trigger.content'],
     },
   ],
+
+  // ─── Facebook triggers ──────────────────────────────────────────────────────
+  'fb.trigger.message': [
+    {
+      key: 'threadType', label: 'Nguồn tin nhắn', type: 'select',
+      desc: 'Workflow sẽ lắng nghe tin nhắn từ đâu?',
+      options: [
+        { value: 'all', label: '📩 Tất cả (cá nhân + nhóm)' },
+        { value: '0',   label: '👤 Chỉ tin nhắn cá nhân' },
+        { value: '1',   label: '👥 Chỉ tin nhắn nhóm' },
+      ],
+    },
+    {
+      key: 'keyword', label: 'Từ khóa kích hoạt', type: 'text',
+      placeholder: 'giá, báo giá, order',
+      desc: 'Workflow chỉ chạy khi tin nhắn chứa một trong các từ khóa này. Nhập nhiều từ khóa cách nhau bằng dấu phẩy. Để trống = mọi tin nhắn đều kích hoạt.',
+    },
+    {
+      key: 'keywordMode', label: 'Cách khớp từ khóa', type: 'select',
+      desc: 'Quy tắc áp dụng khi kiểm tra từ khóa trong tin nhắn.',
+      options: [
+        { value: 'contains_any', label: 'Chứa ít nhất 1 từ khóa (phổ biến nhất)' },
+        { value: 'contains_all', label: 'Phải chứa đủ tất cả từ khóa' },
+        { value: 'equals',       label: 'Khớp chính xác nguyên câu' },
+        { value: 'starts_with',  label: 'Bắt đầu bằng từ khóa' },
+        { value: 'regex',        label: '🔬 Regex — biểu thức chính quy (nâng cao)' },
+      ],
+    },
+    {
+      key: 'ignoreOwn', label: 'Bỏ qua tin nhắn do mình gửi', type: 'boolean',
+      desc: 'Bật để tránh workflow tự kích hoạt khi tài khoản này tự gửi tin.',
+    },
+    {
+      key: 'onlyOwn', label: 'Chỉ xử lý tin mình tự gửi', type: 'boolean',
+      desc: 'Ngược lại — chỉ chạy với tin nhắn từ chính tài khoản này.',
+    },
+    {
+      key: 'fromId', label: 'Chỉ nhận từ người dùng cụ thể', type: 'contact-picker', contactType: 'user',
+      placeholder: 'Để trống = tất cả mọi người',
+      desc: 'Chọn một người cụ thể để lắng nghe. Để trống = nhận từ tất cả.',
+      advanced: true,
+    },
+    {
+      key: 'groupId', label: 'Chỉ nhận từ nhóm cụ thể', type: 'contact-picker', contactType: 'group',
+      placeholder: 'Để trống = tất cả các nhóm',
+      desc: 'Chọn một nhóm cụ thể để lắng nghe. Để trống = nhận từ tất cả nhóm.',
+      advanced: true,
+    },
+    {
+      key: 'threadId', label: 'Chỉ nhận từ hội thoại cụ thể', type: 'contact-picker', contactType: 'all',
+      placeholder: 'Để trống = tất cả hội thoại',
+      desc: 'ID hội thoại Facebook muốn lắng nghe. Để trống = nhận từ tất cả hội thoại.',
+      advanced: true,
+    },
+    {
+      key: 'debounceSeconds', label: '⏳ Gom tin nhắn liên tiếp (giây)', type: 'number',
+      placeholder: '0',
+      desc: 'Chờ N giây sau tin nhắn cuối cùng rồi mới chạy workflow (gom tất cả tin nhắn liên tiếp thành 1 lần xử lý). 0 = chạy ngay mỗi tin.',
+      advanced: true,
+    },
+  ],
+  'fb.trigger.image': [
+    {
+      key: 'threadId', label: 'Chỉ nhận từ hội thoại cụ thể', type: 'contact-picker', contactType: 'all',
+      placeholder: 'Để trống = tất cả hội thoại',
+      desc: 'ID hội thoại Facebook muốn lắng nghe. Để trống = nhận từ tất cả.',
+      advanced: true,
+    },
+  ],
+  'fb.trigger.video': [
+    {
+      key: 'threadId', label: 'Chỉ nhận từ hội thoại cụ thể', type: 'contact-picker', contactType: 'all',
+      placeholder: 'Để trống = tất cả hội thoại',
+      desc: 'ID hội thoại Facebook muốn lắng nghe. Để trống = nhận từ tất cả.',
+      advanced: true,
+    },
+  ],
+  'fb.trigger.file': [
+    {
+      key: 'threadId', label: 'Chỉ nhận từ hội thoại cụ thể', type: 'contact-picker', contactType: 'all',
+      placeholder: 'Để trống = tất cả hội thoại',
+      desc: 'ID hội thoại Facebook muốn lắng nghe. Để trống = nhận từ tất cả.',
+      advanced: true,
+    },
+  ],
+  'fb.trigger.sticker': [
+    {
+      key: 'threadId', label: 'Chỉ nhận từ hội thoại cụ thể', type: 'contact-picker', contactType: 'all',
+      placeholder: 'Để trống = tất cả hội thoại',
+      desc: 'ID hội thoại Facebook muốn lắng nghe. Để trống = nhận từ tất cả.',
+      advanced: true,
+    },
+  ],
+  'fb.trigger.reaction': [
+    {
+      key: 'reactionType', label: 'Loại cảm xúc', type: 'select',
+      desc: 'Workflow chạy khi tin nhắn nhận được cảm xúc nào?',
+      options: [
+        { value: 'any', label: '💬 Bất kỳ cảm xúc nào' },
+        { value: '👍',  label: '👍 Like' },
+        { value: '❤️',  label: '❤️ Yêu thích' },
+        { value: '😂',  label: '😂 Haha' },
+        { value: '😮',  label: '😮 Wow' },
+        { value: '😢',  label: '😢 Buồn' },
+        { value: '😡',  label: '😡 Giận' },
+      ],
+    },
+    {
+      key: 'threadId', label: 'Chỉ theo dõi hội thoại cụ thể', type: 'contact-picker', contactType: 'all',
+      placeholder: 'Để trống = tất cả hội thoại',
+      desc: 'ID hội thoại cụ thể muốn theo dõi. Để trống = tất cả.',
+      advanced: true,
+    },
+  ],
+  'fb.trigger.unsend': [
+    {
+      key: 'threadId', label: 'Chỉ theo dõi hội thoại cụ thể', type: 'contact-picker', contactType: 'all',
+      placeholder: 'Để trống = tất cả hội thoại',
+      desc: 'ID hội thoại cụ thể muốn theo dõi sự kiện thu hồi. Để trống = tất cả.',
+      advanced: true,
+    },
+  ],
+  'fb.trigger.groupEvent': [
+    {
+      key: 'eventType', label: 'Sự kiện cần theo dõi', type: 'select',
+      desc: 'Chọn loại sự kiện trong nhóm Facebook sẽ kích hoạt workflow.',
+      options: [
+        { value: 'all',              label: '🔔 Mọi sự kiện nhóm' },
+        { value: 'participant_added', label: '➕ Thành viên mới tham gia' },
+        { value: 'participant_left',  label: '➖ Thành viên rời nhóm' },
+      ],
+    },
+    {
+      key: 'threadId', label: 'Chỉ theo dõi nhóm cụ thể', type: 'contact-picker', contactType: 'all',
+      placeholder: 'Để trống = theo dõi tất cả nhóm',
+      desc: 'Chọn một nhóm Facebook để chỉ lắng nghe sự kiện từ nhóm đó.',
+      advanced: true,
+    },
+  ],
+
+  // ─── Facebook Actions ────────────────────────────────────────────────────
+  'fb.action.sendMessage': [
+    {
+      key: 'message', label: 'Nội dung tin nhắn', type: 'textarea',
+      placeholder: 'Xin chào! Mình có thể giúp gì?',
+      desc: 'Nội dung tin nhắn gửi đi. Dùng {{ }} để chèn dữ liệu động.',
+      templateVars: ['$trigger.fromName', '$trigger.content', '$trigger.threadId'],
+    },
+    {
+      key: 'threadId', label: 'Gửi đến hội thoại', type: 'contact-picker', contactType: 'all',
+      placeholder: '{{ $trigger.threadId }}',
+      desc: 'ID hội thoại Facebook nhận tin. Giữ mặc định để tự động reply.',
+      templateVars: ['$trigger.threadId'],
+    },
+  ],
+  'fb.action.sendImage': [
+    {
+      key: 'filePath', label: 'Ảnh/file cần gửi', type: 'file-picker', fileType: 'image',
+      placeholder: 'https://example.com/image.png',
+      desc: 'Chọn ảnh từ máy tính hoặc nhập URL ảnh trực tiếp.',
+    },
+    {
+      key: 'body', label: 'Chú thích (tuỳ chọn)', type: 'text',
+      placeholder: 'Cảm ơn bạn đã mua hàng!',
+      desc: 'Nội dung văn bản đi kèm ảnh (caption). Để trống nếu chỉ gửi ảnh.',
+    },
+    {
+      key: 'threadId', label: 'Gửi đến hội thoại', type: 'contact-picker', contactType: 'all',
+      placeholder: '{{ $trigger.threadId }}',
+      desc: 'ID hội thoại Facebook nhận ảnh.',
+      templateVars: ['$trigger.threadId'],
+    },
+  ],
+  'fb.action.addReaction': [
+    {
+      key: 'emoji', label: 'Biểu tượng cảm xúc', type: 'select',
+      desc: 'Chọn emoji reaction để thả vào tin nhắn.',
+      options: [
+        { value: '👍', label: '👍 Like' },
+        { value: '❤️', label: '❤️ Yêu thích' },
+        { value: '😂', label: '😂 Haha' },
+        { value: '😮', label: '😮 Wow' },
+        { value: '😢', label: '😢 Buồn' },
+        { value: '😡', label: '😡 Giận' },
+      ],
+    },
+    {
+      key: 'messageId', label: 'ID tin nhắn cần react', type: 'text',
+      placeholder: '{{ $trigger.messageId }}',
+      desc: 'ID tin nhắn Facebook muốn thả reaction.',
+      templateVars: ['$trigger.messageId'],
+      advanced: true,
+    },
+  ],
+  'fb.action.unsend': [
+    {
+      key: 'messageId', label: 'ID tin nhắn cần thu hồi', type: 'text',
+      placeholder: '{{ $trigger.messageId }}',
+      desc: 'ID tin nhắn Facebook muốn thu hồi (xóa 2 phía).',
+      templateVars: ['$trigger.messageId'],
+    },
+  ],
+  'fb.action.editMessage': [
+    {
+      key: 'messageId', label: 'ID tin nhắn cần chỉnh sửa', type: 'text',
+      placeholder: '{{ $trigger.messageId }}',
+      desc: 'ID tin nhắn Facebook muốn chỉnh sửa nội dung.',
+      templateVars: ['$trigger.messageId'],
+    },
+    {
+      key: 'text', label: 'Nội dung mới', type: 'textarea',
+      placeholder: 'Nhập nội dung mới cho tin nhắn...',
+      desc: 'Nội dung sẽ thay thế tin nhắn cũ.',
+    },
+  ],
+  'fb.action.forward': [
+    {
+      key: 'messageId', label: 'Tin nhắn cần chuyển tiếp', type: 'text',
+      placeholder: '{{ $trigger.messageId }}',
+      desc: 'ID tin nhắn muốn chuyển tiếp.',
+      templateVars: ['$trigger.messageId'],
+    },
+    {
+      key: 'targetThreadId', label: 'Chuyển đến hội thoại', type: 'contact-picker', contactType: 'all',
+      placeholder: 'ID hội thoại đích',
+      desc: 'ID hội thoại Facebook nơi tin nhắn sẽ được chuyển đến.',
+    },
+  ],
+  'fb.action.pin': [
+    {
+      key: 'messageId', label: 'ID tin nhắn cần ghim', type: 'text',
+      placeholder: '{{ $trigger.messageId }}',
+      desc: 'ID tin nhắn Facebook muốn ghim trong hội thoại.',
+      templateVars: ['$trigger.messageId'],
+    },
+    {
+      key: 'threadId', label: 'Trong hội thoại', type: 'contact-picker', contactType: 'all',
+      placeholder: '{{ $trigger.threadId }}',
+      desc: 'ID hội thoại chứa tin nhắn cần ghim.',
+      templateVars: ['$trigger.threadId'],
+      advanced: true,
+    },
+  ],
+  'fb.action.unpin': [
+    {
+      key: 'messageId', label: 'ID tin nhắn cần bỏ ghim', type: 'text',
+      placeholder: '{{ $trigger.messageId }}',
+      desc: 'ID tin nhắn Facebook muốn bỏ ghim.',
+      templateVars: ['$trigger.messageId'],
+    },
+    {
+      key: 'threadId', label: 'Trong hội thoại', type: 'contact-picker', contactType: 'all',
+      placeholder: '{{ $trigger.threadId }}',
+      desc: 'ID hội thoại chứa tin nhắn cần bỏ ghim.',
+      templateVars: ['$trigger.threadId'],
+      advanced: true,
+    },
+  ],
+  'fb.action.createPoll': [
+    {
+      key: 'question', label: 'Câu hỏi bình chọn', type: 'text',
+      placeholder: 'Bạn thích sản phẩm nào nhất?',
+      desc: 'Nội dung câu hỏi hiển thị trong poll Facebook.',
+    },
+    {
+      key: 'options', label: 'Các lựa chọn', type: 'multiline',
+      placeholder: 'Sản phẩm A\nSản phẩm B\nSản phẩm C',
+      desc: 'Mỗi dòng là một lựa chọn. Nhập ít nhất 2 lựa chọn.',
+    },
+    {
+      key: 'threadId', label: 'Tạo trong hội thoại/nhóm', type: 'contact-picker', contactType: 'all',
+      placeholder: 'ID hội thoại hoặc nhóm Facebook',
+      desc: 'ID hội thoại/nhóm nơi poll sẽ được tạo.',
+    },
+  ],
+  'fb.action.sendTyping': [
+    {
+      key: 'threadId', label: 'Gửi đến hội thoại', type: 'contact-picker', contactType: 'all',
+      placeholder: '{{ $trigger.threadId }}',
+      desc: 'ID hội thoại Facebook cần gửi trạng thái đang gõ.',
+      templateVars: ['$trigger.threadId'],
+    },
+    {
+      key: 'isTyping', label: 'Trạng thái', type: 'select',
+      desc: 'Bật để hiển thị "đang gõ...", tắt để ẩn.',
+      options: [
+        { value: 'true', label: '💬 Đang gõ...' },
+        { value: 'false', label: '🙊 Ẩn trạng thái' },
+      ],
+    },
+  ],
+  'fb.action.markAsRead': [
+    {
+      key: 'threadId', label: 'Đánh dấu hội thoại', type: 'contact-picker', contactType: 'all',
+      placeholder: '{{ $trigger.threadId }}',
+      desc: 'ID hội thoại Facebook muốn đánh dấu đã đọc.',
+      templateVars: ['$trigger.threadId'],
+    },
+  ],
+  'fb.action.block': [
+    {
+      key: 'userId', label: 'User ID cần chặn', type: 'contact-picker', contactType: 'user',
+      placeholder: '{{ $trigger.fromId }}',
+      desc: 'ID người dùng Facebook muốn chặn.',
+      templateVars: ['$trigger.fromId'],
+    },
+  ],
+  'fb.action.changeName': [
+    {
+      key: 'threadId', label: 'Nhóm cần đổi tên', type: 'contact-picker', contactType: 'group',
+      placeholder: 'ID nhóm Facebook',
+      desc: 'ID nhóm Facebook muốn đổi tên.',
+    },
+    {
+      key: 'name', label: 'Tên mới của nhóm', type: 'text',
+      placeholder: 'Nhập tên mới cho nhóm',
+      desc: 'Tên mới sẽ được đặt cho nhóm Facebook.',
+    },
+  ],
+  'fb.action.changeEmoji': [
+    {
+      key: 'threadId', label: 'Nhóm cần đổi biểu tượng', type: 'contact-picker', contactType: 'group',
+      placeholder: 'ID nhóm Facebook',
+      desc: 'ID nhóm Facebook muốn đổi emoji đại diện.',
+    },
+    {
+      key: 'emoji', label: 'Biểu tượng mới', type: 'text',
+      placeholder: '😊',
+      desc: 'Emoji mới làm biểu tượng đại diện cho nhóm.',
+    },
+  ],
+  'fb.action.changeNickname': [
+    {
+      key: 'threadId', label: 'Trong nhóm', type: 'contact-picker', contactType: 'group',
+      placeholder: 'ID nhóm Facebook',
+      desc: 'ID nhóm Facebook chứa thành viên cần đổi biệt danh.',
+    },
+    {
+      key: 'userId', label: 'Thành viên cần đổi biệt danh', type: 'contact-picker', contactType: 'user',
+      placeholder: 'ID người dùng',
+      desc: 'ID người dùng Facebook muốn đổi biệt danh trong nhóm.',
+    },
+    {
+      key: 'nickname', label: 'Biệt danh mới', type: 'text',
+      placeholder: 'Nhập biệt danh mới',
+      desc: 'Biệt danh mới trong nhóm cho thành viên này.',
+    },
+  ],
 };
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
   node: any;
+  nodes?: any[];          // All nodes in the workflow (for node reference picking)
+  edges?: any[];          // All edges in the workflow (to compute upstream nodes)
   onConfigChange: (config: Record<string, any>) => void;
   onLabelChange: (label: string) => void;
   onClose: () => void;
@@ -1528,50 +1884,6 @@ const descCls   = 'text-[11px] text-gray-500 mt-1.5 leading-relaxed';
 const hintCls   = 'text-[11px] text-blue-400/80 mt-1 leading-relaxed';
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
-
-function TemplateVarChips({ vars, onInsert }: { vars: string[]; onInsert: (v: string) => void }) {
-  const [copiedVar, setCopiedVar] = useState<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const handleClick = (v: string) => {
-    const text = `{{ ${v} }}`;
-    // Insert into field
-    onInsert(text);
-    // Copy to clipboard
-    navigator.clipboard.writeText(text).catch(() => {});
-    // Show feedback
-    setCopiedVar(v);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setCopiedVar(null), 1500);
-  };
-
-  return (
-    <div className="flex flex-wrap gap-1 mt-2">
-      <span className="text-[11px] text-gray-600 self-center mr-0.5">Chèn &amp; copy:</span>
-      {vars.map(v => {
-        const copied = copiedVar === v;
-        return (
-          <button
-            key={v} type="button"
-            onClick={() => handleClick(v)}
-            title={`Click để chèn + copy: {{ ${v} }}`}
-            className={`text-[11px] px-1.5 py-0.5 rounded-md border transition-all duration-150 font-mono flex items-center gap-0.5
-              ${copied
-                ? 'bg-green-500/20 border-green-500/50 text-green-400'
-                : 'bg-blue-500/10 border-blue-500/25 text-blue-400 hover:bg-blue-500/20 hover:border-blue-400/50'
-              }`}
-          >
-            {copied ? (
-              <><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>copy!</>
-            ) : (
-              <>{v}<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="ml-0.5 opacity-50"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 function ToggleSwitch({ checked, onChange, label, desc }: {
   checked: boolean; onChange: (v: boolean) => void; label: string; desc?: string;
@@ -1750,7 +2062,7 @@ function AccountAvatar({ account, size = 'sm' }: { account: { avatar_url?: strin
     lg: 'w-10 h-10 text-xs',
   };
   const sizeClass = sizeClasses[size];
-  
+
   if (account.avatar_url) {
     return (
       <img
@@ -1763,7 +2075,7 @@ function AccountAvatar({ account, size = 'sm' }: { account: { avatar_url?: strin
       />
     );
   }
-  
+
   // Fallback: initials
   const initials = (account.full_name || account.display_name || account.zalo_id).slice(0, 2).toUpperCase();
   return (
@@ -1824,14 +2136,14 @@ function LabelPickerModal({
   // Get accounts that have labels (show all accounts for Zalo if any labels exist)
   const accountsWithLabels = React.useMemo(() => {
     const currentOpts = activeTab === 'local' ? localOpts : zaloOpts;
-    
+
     // For Zalo: show all accounts that have labels
     if (activeTab === 'zalo') {
       const pageIds = new Set<string>();
       currentOpts.forEach(o => {
         if (o.pageId) pageIds.add(o.pageId);
       });
-      
+
       // If no pageId set on labels, show all accounts
       if (pageIds.size === 0 && currentOpts.length > 0) {
         return accounts.map(acc => ({
@@ -1839,13 +2151,13 @@ function LabelPickerModal({
           labelCount: currentOpts.length, // All labels available for all accounts
         }));
       }
-      
+
       return accounts.filter(a => pageIds.has(a.zalo_id)).map(acc => ({
         ...acc,
         labelCount: currentOpts.filter(o => o.pageId === acc.zalo_id).length,
       }));
     }
-    
+
     // For Local: filter by pageIds
     const pageIds = new Set<string>();
     currentOpts.forEach(o => {
@@ -1861,15 +2173,15 @@ function LabelPickerModal({
   // Filter labels by selected account
   const filteredLabels = React.useMemo(() => {
     const currentOpts = activeTab === 'local' ? localOpts : zaloOpts;
-    
+
     // Show all if 'all' selected
     if (selectedAccountId === 'all') return currentOpts;
-    
+
     // For Zalo: filter by pageId, but include labels without pageId
     if (activeTab === 'zalo') {
       return currentOpts.filter(o => !o.pageId || o.pageId === selectedAccountId);
     }
-    
+
     // For Local: filter by pageIds
     return currentOpts.filter(o => o.pageIds?.includes(selectedAccountId));
   }, [activeTab, localOpts, zaloOpts, selectedAccountId]);
@@ -1900,7 +2212,7 @@ function LabelPickerModal({
     <div className="fixed inset-0 z-[9999] flex items-center justify-center">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      
+
       {/* Modal */}
       <div className="relative bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-[680px] max-w-[95vw] max-h-[80vh] flex flex-col overflow-hidden">
         {/* Header */}
@@ -2049,7 +2361,7 @@ function LabelPickerModal({
                   <span className="text-4xl mb-3">🏷️</span>
                   <p className="text-sm">Không có nhãn nào</p>
                   <p className="text-xs mt-1">
-                    {selectedAccountId !== 'all' 
+                    {selectedAccountId !== 'all'
                       ? 'Tài khoản này chưa có nhãn'
                       : activeTab === 'local' ? 'Chưa có nhãn Local' : 'Chưa có nhãn Zalo'}
                   </p>
@@ -2367,7 +2679,7 @@ function ContactPickerModal({
   // Load contacts when account changes
   React.useEffect(() => {
     if (!open || !selectedAccountId) return;
-    
+
     const loadContacts = async () => {
       setLoading(true);
       setError(null);
@@ -2378,24 +2690,24 @@ function ContactPickerModal({
         setError('Không tìm thấy tài khoản');
         return;
       }
-      
+
       let hasError = false;
       let errorMsg = '';
-      
+
       // Load contacts from database - includes both users and groups
       try {
         const contactsRes = await ipc.db?.getContacts(selectedAccountId);
         const contactsList = contactsRes?.contacts || [];
         contactsList.forEach((c: any) => {
           if (!c.contact_id) return;
-          
+
           // Check contact_type from DB
           const isGroup = c.contact_type === 'group';
-          
+
           // Filter based on contactType prop
           if (contactType === 'user' && isGroup) return;
           if (contactType === 'group' && !isGroup) return;
-          
+
           items.push({
             id: c.contact_id,
             // Tên gợi nhớ (alias) hiển thị trước, sau đó là display_name, zalo_name
@@ -2410,13 +2722,13 @@ function ContactPickerModal({
       } catch (err: any) {
         console.warn('[ContactPicker] Failed to load contacts from DB:', err);
       }
-      
+
       // Load groups from API - requires active connection (as backup if not in DB)
       if (contactType === 'group' || contactType === 'all') {
         try {
           const auth = { cookies: acc.cookies, imei: acc.imei, userAgent: acc.user_agent };
           const groupsRes = await ipc.zalo?.getGroups(auth);
-          
+
           // Check for API error
           if (groupsRes?.error) {
             hasError = true;
@@ -2425,11 +2737,11 @@ function ContactPickerModal({
           } else {
             const groups = groupsRes?.response?.gridInfoMap || {};
             const existingIds = new Set(items.map(i => i.id));
-            
+
             Object.entries(groups).forEach(([groupId, groupInfo]: [string, any]) => {
               // Skip if already loaded from DB
               if (existingIds.has(groupId)) return;
-              
+
               items.push({
                 id: groupId,
                 name: groupInfo?.name || `Nhóm ${groupId}`,
@@ -2446,9 +2758,9 @@ function ContactPickerModal({
           console.warn('[ContactPicker] Failed to load groups:', err);
         }
       }
-      
+
       setContacts(items);
-      
+
       // Only show error if we got no results AND there was an error
       if (items.length === 0 && hasError) {
         setError(errorMsg || 'Tài khoản chưa kết nối. Vui lòng kết nối lại.');
@@ -2458,32 +2770,32 @@ function ContactPickerModal({
       } else {
         setError(null);
       }
-      
+
       setLoading(false);
     };
-    
+
     loadContacts();
   }, [open, selectedAccountId, contactType, accounts]);
 
   // Filter contacts by search and tab
   const filteredContacts = React.useMemo(() => {
     let result = contacts;
-    
+
     // Filter by tab (only when contactType is 'all')
     if (contactType === 'all' && filterTab !== 'all') {
       result = result.filter(c => c.type === filterTab);
     }
-    
+
     // Filter by search
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      result = result.filter(c => 
-        c.name.toLowerCase().includes(q) || 
+      result = result.filter(c =>
+        c.name.toLowerCase().includes(q) ||
         c.id.includes(q) ||
         (c.alias && c.alias.toLowerCase().includes(q))
       );
     }
-    
+
     return result;
   }, [contacts, searchQuery, filterTab, contactType]);
 
@@ -2502,7 +2814,7 @@ function ContactPickerModal({
     <div className="fixed inset-0 z-[9999] flex items-center justify-center">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      
+
       {/* Modal */}
       <div className={`relative rounded-2xl shadow-2xl w-[600px] max-w-[95vw] max-h-[80vh] flex flex-col overflow-hidden border ${
         isLight ? 'bg-white border-gray-200' : 'bg-gray-900 border-gray-700'
@@ -2557,7 +2869,7 @@ function ContactPickerModal({
                     onClick={() => setSelectedAccountId(acc.zalo_id)}
                     className={`w-full flex items-center gap-2 px-2 py-2 rounded-lg text-left transition-all ${
                       isActive
-                        ? isLight 
+                        ? isLight
                           ? 'bg-blue-50 border border-blue-200 text-blue-700'
                           : 'bg-blue-500/20 border border-blue-500/40 text-blue-300'
                         : isLight
@@ -2629,7 +2941,7 @@ function ContactPickerModal({
                   <span>📋</span>
                   <span>Tất cả</span>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                    filterTab === 'all' 
+                    filterTab === 'all'
                       ? isLight ? 'bg-blue-100 text-blue-600' : 'bg-blue-500/20 text-blue-400'
                       : isLight ? 'bg-gray-200 text-gray-500' : 'bg-gray-700 text-gray-500'
                   }`}>{contacts.length}</span>
@@ -2699,7 +3011,7 @@ function ContactPickerModal({
                   </div>
                 </div>
               )}
-              
+
               {loading ? (
                 <div className="flex items-center justify-center py-12">
                   <svg className={`animate-spin w-6 h-6 ${isLight ? 'text-gray-400' : 'text-gray-500'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -2743,9 +3055,9 @@ function ContactPickerModal({
                           size="sm"
                         />
                       ) : contact.avatar ? (
-                        <img 
-                          src={contact.avatar} 
-                          alt="" 
+                        <img
+                          src={contact.avatar}
+                          alt=""
                           className="w-9 h-9 rounded-full object-cover flex-shrink-0"
                           onError={(e) => {
                             (e.target as HTMLImageElement).style.display = 'none';
@@ -2760,7 +3072,7 @@ function ContactPickerModal({
                       )}
                       {/* Hidden fallback for user avatar error */}
                       {contact.type === 'user' && contact.avatar && (
-                        <div 
+                        <div
                           className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0"
                           style={{ display: 'none' }}
                         >
@@ -2814,7 +3126,7 @@ function ContactPickerModal({
               type="button"
               onClick={onClose}
               className={`px-4 py-2 text-xs font-medium rounded-lg transition-colors ${
-                isLight 
+                isLight
                   ? 'text-gray-700 bg-gray-100 hover:bg-gray-200'
                   : 'text-gray-300 bg-gray-700 hover:bg-gray-600'
               }`}
@@ -2940,12 +3252,12 @@ function FilePickerField({
 
   const handleSelectFile = async () => {
     try {
-      const filters = fileType === 'image' 
+      const filters = fileType === 'image'
         ? [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'] }]
         : [{ name: 'All Files', extensions: ['*'] }];
-      
+
       const result = await ipc.file?.openDialog({ filters });
-      
+
       if (result?.success && !result.canceled && result.filePaths?.[0]) {
         onChange(result.filePaths[0]);
         setPreviewError(false);
@@ -3042,7 +3354,7 @@ function FilePickerField({
               </span>
             </>
           ) : null}
-          
+
           {value && (
             <button
               type="button"
@@ -3063,9 +3375,155 @@ function FilePickerField({
   );
 }
 
+// ─── Node Picker Modal ────────────────────────────────────────────────────────
+
+function NodePickerModal({
+  open,
+  onClose,
+  allNodes,
+  currentId,
+  onInsertOutput,
+}: {
+  open: boolean;
+  onClose: () => void;
+  allNodes: { id: string; label: string; type: string; isCurrent: boolean }[];
+  currentId?: string;
+  onInsertOutput: (nodeId: string) => void;
+}) {
+  const [search, setSearch] = React.useState('');
+  const [copiedId, setCopiedId] = React.useState<string | null>(null);
+  const theme = useAppStore(s => s.theme);
+  const isLight = theme === 'light';
+
+  const filtered = search.trim()
+    ? allNodes.filter(n =>
+        n.label.toLowerCase().includes(search.toLowerCase()) ||
+        n.id.toLowerCase().includes(search) ||
+        n.type.toLowerCase().includes(search)
+      )
+    : allNodes;
+
+  const copyRef = (id: string) => {
+    const text = `{{ $node.${id}.output }}`;
+    navigator.clipboard.writeText(text).catch(() => {});
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 1200);
+  };
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className={`relative rounded-2xl shadow-2xl w-[520px] max-w-[95vw] max-h-[80vh] flex flex-col overflow-hidden border ${
+        isLight ? 'bg-white border-gray-200' : 'bg-gray-900 border-gray-700'
+      }`}>
+        {/* Header */}
+        <div className={`flex items-center justify-between px-5 py-4 border-b ${isLight ? 'border-gray-200' : 'border-gray-700'}`}>
+          <div>
+            <p className={`text-base font-semibold ${isLight ? 'text-gray-900' : 'text-white'}`}>Chọn dữ liệu từ node</p>
+            <p className={`text-xs ${isLight ? 'text-gray-500' : 'text-gray-400'}`}>Click để copy UUID hoặc chèn cú pháp tham chiếu</p>
+          </div>
+          <button onClick={onClose} className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
+            isLight ? 'hover:bg-gray-100 text-gray-500' : 'hover:bg-gray-700 text-gray-400'
+          }`}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        {/* Search */}
+        <div className={`px-4 py-3 border-b ${isLight ? 'border-gray-200' : 'border-gray-700/50'}`}>
+          <div className="relative">
+            <svg className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${isLight ? 'text-gray-400' : 'text-gray-500'}`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+            </svg>
+            <input
+              type="text" placeholder="Tìm theo tên, ID, loại node..."
+              value={search} onChange={e => setSearch(e.target.value)}
+              className={`w-full pl-10 pr-4 py-2 text-sm rounded-lg border focus:outline-none focus:ring-2 ${
+                isLight
+                  ? 'bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-blue-500/30'
+                  : 'bg-gray-800 border-gray-600 text-white placeholder-gray-500 focus:ring-blue-500/30'
+              }`}
+            />
+          </div>
+        </div>
+
+        {/* Node list */}
+        <div className="flex-1 overflow-y-auto p-3 space-y-1">
+          {filtered.length === 0 ? (
+            <div className={`text-center py-8 ${isLight ? 'text-gray-500' : 'text-gray-500'}`}>
+              <span className="text-3xl block mb-2">🔍</span>
+              <p className="text-sm">Không tìm thấy node</p>
+            </div>
+          ) : (
+            filtered.map(n => {
+              const isCurrent = n.id === currentId;
+              const copied = copiedId === n.id;
+              return (
+                <div key={n.id} className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border transition-all ${
+                  isCurrent
+                    ? isLight ? 'bg-gray-100 border-gray-200' : 'bg-gray-800/60 border-gray-700'
+                    : isLight ? 'bg-white border-gray-200 hover:border-gray-300' : 'bg-gray-800/40 border-gray-700/40 hover:border-gray-600'
+                }`}>
+                  {/* Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-sm font-medium truncate flex items-center gap-1.5 ${isLight ? 'text-gray-900' : 'text-white'}`}>
+                      {n.label}
+                      {isCurrent && (
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                          isLight ? 'bg-gray-200 text-gray-500' : 'bg-gray-700 text-gray-400'
+                        }`}>đang chọn</span>
+                      )}
+                    </div>
+                    <div className={`text-[10px] font-mono truncate mt-0.5 ${isLight ? 'text-gray-400' : 'text-gray-500'}`}>
+                      {n.id}
+                    </div>
+                  </div>
+
+                  {/* Copy full reference button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      copyRef(n.id);
+                      onClose();
+                    }}
+                    title="Copy {{ $node.<ID>.output }}"
+                    className={`flex-shrink-0 px-2.5 py-1.5 text-[10px] font-medium rounded-lg transition-colors ${
+                      copied
+                        ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+                        : isLight
+                          ? 'bg-cyan-50 text-cyan-700 hover:bg-cyan-100 border border-cyan-200'
+                          : 'bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 border border-cyan-500/30'
+                    }`}
+                  >
+                    {copied ? '✓ Copied' : 'Copy output'}
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className={`px-5 py-3 border-t flex items-center justify-between ${isLight ? 'border-gray-200 bg-gray-50' : 'border-gray-700 bg-gray-800/50'}`}>
+          <span className={`text-[11px] ${isLight ? 'text-gray-500' : 'text-gray-500'}`}>
+            {filtered.length}/{allNodes.length} node
+          </span>
+          <button onClick={onClose} className={`px-4 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+            isLight ? 'bg-gray-100 text-gray-700 hover:bg-gray-200' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+          }`}>Đóng</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function NodeConfigPanel({ node, onConfigChange, onLabelChange, onClose }: Props) {
+export default function NodeConfigPanel({ node, nodes, edges, onConfigChange, onLabelChange, onClose }: Props) {
   const { accounts } = useAccountStore();
   const [config, setConfig]             = useState<Record<string, any>>(node.config || {});
   const [label, setLabel]               = useState(node.label || '');
@@ -3076,6 +3534,10 @@ export default function NodeConfigPanel({ node, onConfigChange, onLabelChange, o
   const [loadingLabelOptions, setLoadingLabelOptions] = useState(false);
   const [assistantList, setAssistantList] = useState<{ id: string; name: string; platform: string; model: string; enabled: boolean }[]>([]);
   const [loadingAssistants, setLoadingAssistants] = useState(false);
+  const [showNodePicker, setShowNodePicker] = useState(false);
+  const [showTemplatePopup, setShowTemplatePopup] = useState(false);
+  const [templatePopupField, setTemplatePopupField] = useState<string>('');
+  const [copiedNodeId, setCopiedNodeId] = useState<string | null>(null);
   const isResizingRef = useRef(false);
   const resizeStartXRef  = useRef(0);
   const resizeStartWRef  = useRef(320);
@@ -3098,7 +3560,7 @@ export default function NodeConfigPanel({ node, onConfigChange, onLabelChange, o
       setLoadedLabelOptions([]);
       return;
     }
-    
+
     let cancelled = false;
     const load = async () => {
       setLoadingLabelOptions(true);
@@ -3127,12 +3589,12 @@ export default function NodeConfigPanel({ node, onConfigChange, onLabelChange, o
 
         // Fetch Zalo labels directly from API for each account
         const currentAccounts = useAccountStore.getState().accounts;
-        
+
         for (const acc of currentAccounts) {
           try {
             const auth = { cookies: acc.cookies, imei: acc.imei, userAgent: acc.user_agent };
             const res = await ipc.zalo?.getLabels({ auth });
-            
+
             const labels = res?.response?.labelData || [];
             labels.forEach((l: any) => {
               if (l?.id === undefined || l?.id === null) return;
@@ -3159,7 +3621,7 @@ export default function NodeConfigPanel({ node, onConfigChange, onLabelChange, o
         opts.forEach(o => {
           if (!unique.has(o.value)) unique.set(o.value, o);
         });
-        
+
         if (!cancelled) setLoadedLabelOptions(Array.from(unique.values()));
       } finally {
         if (!cancelled) setLoadingLabelOptions(false);
@@ -3228,6 +3690,65 @@ export default function NodeConfigPanel({ node, onConfigChange, onLabelChange, o
       onConfigChange(next);
     }
   }, [node.type, config.aiConfigMode, assistantList, loadingAssistants]);
+
+  // ── Compute upstream/reachable nodes for reference picking ──────────────
+  const upstreamNodes = React.useMemo(() => {
+    if (!nodes || !edges || !node?.id) return [];
+
+    // Build reverse adjacency: target → [sources]
+    const reverseAdj = new Map<string, string[]>();
+    for (const e of edges) {
+      if (!reverseAdj.has(e.target)) reverseAdj.set(e.target, []);
+      reverseAdj.get(e.target)!.push(e.source);
+    }
+
+    // BFS backwards from current node to find all upstream nodes
+    const upstream = new Set<string>();
+    const queue = [node.id];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const sources = reverseAdj.get(current) || [];
+      for (const src of sources) {
+        if (!upstream.has(src)) {
+          upstream.add(src);
+          queue.push(src);
+        }
+      }
+    }
+
+    // Map to display info
+    const nodeMap = new Map(nodes.map((n: any) => [n.id, n]));
+    return Array.from(upstream)
+      .map(id => {
+        const n = nodeMap.get(id);
+        if (!n) return null;
+        const data = n.data || {};
+        return {
+          id,
+          label: data.label || n.label || getNodeLabel(data.type || n.type),
+          type: data.type || n.type,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [nodes, edges, node?.id]);
+
+  // ── All nodes for the node picker modal ─────────────────────────────────
+  const allNodeList = React.useMemo(() => {
+    if (!nodes) return [];
+    return nodes
+      .map((n: any) => {
+        const data = n.data || {};
+        const type = data.type || n.type;
+        return {
+          id: n.id,
+          label: data.label || n.label || getNodeLabel(type),
+          type,
+          isCurrent: n.id === node?.id,
+        };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [nodes, node?.id]);
 
   // ── Drag-resize logic ────────────────────────────────────────────────────
   const handleResizeMouseDown = (e: React.MouseEvent) => {
@@ -3350,7 +3871,7 @@ export default function NodeConfigPanel({ node, onConfigChange, onLabelChange, o
             field.labelMode === 'dynamic'
               ? (config.labelSource === 'zalo' ? 'single' : 'multi')
               : (field.labelMode === 'single' ? 'single' : 'multi');
-          
+
           // Pass ALL labels to picker - user can switch tabs Local/Zalo in modal
           // labelSource only affects mode (single for zalo, multi for local)
           return (
@@ -3451,7 +3972,17 @@ export default function NodeConfigPanel({ node, onConfigChange, onLabelChange, o
         {field.desc && !isBool && <p className={descCls}>{field.desc}</p>}
         {field.hint && field.type !== 'json' && <p className={hintCls}>💡 {field.hint}</p>}
         {field.templateVars?.length && !isBool && !(field.htmlToggle && config[field.htmlToggle]) && (
-          <TemplateVarChips vars={field.templateVars} onInsert={v => appendVar(field.key, v)} />
+          <button
+            type="button"
+            onClick={() => { setTemplatePopupField(field.key); setShowTemplatePopup(true); }}
+            className="mt-1.5 flex items-center gap-1.5 text-[10px] font-medium text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20 px-2 py-1 rounded-lg transition-colors"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/>
+            </svg>
+            Chèn biến động
+            <span className="text-[9px] text-cyan-500/60">({field.templateVars.length} biến)</span>
+          </button>
         )}
       </div>
     );
@@ -3502,21 +4033,106 @@ export default function NodeConfigPanel({ node, onConfigChange, onLabelChange, o
   );
 
   const footer = (
-    <div className="px-4 py-3 border-t border-gray-700/60 flex-shrink-0">
-      <div className="bg-gray-800/60 rounded-xl px-3 py-2">
-        <p className="text-[11px] text-gray-500 font-medium mb-1.5">Cú pháp chèn biến động</p>
-        <div className="flex flex-wrap gap-1">
-          {['$trigger.fromName','$trigger.content','$trigger.threadId','$date.today'].map(v => (
-            <code key={v}
-              onClick={() => { navigator.clipboard.writeText(`{{${v}}}`).catch(()=>{}); }}
-              title={`Click để copy: {{${v}}}`}
-              className="text-[9px] text-blue-400 bg-blue-500/10 px-1 py-0.5 rounded font-mono cursor-pointer hover:bg-blue-500/20 transition-colors select-all">
-              {`{{${v}}}`}
-            </code>
-          ))}
+    <div className="px-4 py-3 border-t border-gray-700/60 flex-shrink-0 space-y-2">
+      {/* ── Node references ── */}
+      {upstreamNodes.length > 0 && (
+        <div className="bg-gray-800/60 rounded-xl px-3 py-2">
+          <p className="text-[11px] text-gray-500 font-medium mb-1.5">Dữ liệu từ node phía trước</p>
+          <div className="flex flex-col gap-1.5">
+            {upstreamNodes.map(n => {
+              const copied = copiedNodeId === n.id;
+              return (
+                <div key={n.id} className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(`{{ $node.${n.id}.output }}`).catch(()=>{});
+                      setCopiedNodeId(n.id);
+                      setTimeout(() => setCopiedNodeId(null), 1000);
+                    }}
+                    className={`flex-1 flex items-center gap-2 text-[10px] font-mono px-2.5 py-1.5 rounded-lg transition-all truncate ${
+                      copied
+                        ? 'bg-green-500/20 text-green-400 border border-green-500/40'
+                        : 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 hover:border-cyan-500/40'
+                    }`}
+                  >
+                    {copied ? (
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="flex-shrink-0"><polyline points="20 6 9 17 4 12"/></svg>
+                    ) : (
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                      </svg>
+                    )}
+                    <span className="truncate">{n.label}</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[9px] text-gray-600 mt-1">Click để copy <span className="font-mono text-gray-500">{'{{ $node.<UUID>.output }}'}</span></p>
         </div>
-        <p className="text-[9px] text-gray-600 mt-1.5">Click để copy vào clipboard</p>
+      )}
+
+      {/* ── Template Variable Popup Trigger ── */}
+      <div className="bg-gray-800/60 rounded-xl px-3 py-2">
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] text-gray-500 font-medium">🔤 Biến động</p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowNodePicker(true)}
+              className="text-[10px] text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 px-2 py-0.5 rounded-lg transition-colors font-medium"
+            >
+              + Output node
+            </button>
+            <button
+              type="button"
+              onClick={() => { setTemplatePopupField(''); setShowTemplatePopup(true); }}
+              className="text-[10px] text-white bg-blue-500 hover:bg-blue-500/60 px-2 py-0.5 rounded-lg transition-colors font-medium"
+            >
+              + Chèn Biến
+            </button>
+          </div>
+        </div>
+        <p className="text-[9px] text-gray-600 mt-1.5">
+          Dùng <code className="text-blue-400 bg-blue-500/10 px-1 rounded text-[9px]">{'{{ }}'}</code> để chèn dữ liệu động từ trigger, ngày giờ, hoặc output của node khác. Click vào nút để xem danh sách đầy đủ.
+        </p>
       </div>
+
+      {/* Node Picker Modal */}
+      {showNodePicker && (
+        <NodePickerModal
+          open={showNodePicker}
+          onClose={() => setShowNodePicker(false)}
+          allNodes={allNodeList}
+          currentId={node?.id}
+          onInsertOutput={(nodeId) => {
+            const text = `{{ $node.${nodeId}.output }}`;
+            navigator.clipboard.writeText(text).catch(() => {});
+            // Focus current active field — user can paste
+          }}
+        />
+      )}
+
+      {/* Template Variable Popup */}
+      <TemplateVarPopup
+        open={showTemplatePopup}
+        onClose={() => setShowTemplatePopup(false)}
+        nodeType={node?.type}
+        allNodes={allNodeList}
+        currentId={node?.id}
+        currentField={templatePopupField}
+        onSelect={(varKey) => {
+          const tag = `{{ ${varKey} }}`;
+          if (templatePopupField) {
+            // Insert into specific field
+            appendVar(templatePopupField, tag);
+          } else {
+            // No specific field — just copy to clipboard
+            navigator.clipboard.writeText(tag).catch(() => {});
+          }
+        }}
+      />
     </div>
   );
 
@@ -3555,7 +4171,7 @@ export default function NodeConfigPanel({ node, onConfigChange, onLabelChange, o
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
         onClick={e => { if (e.target === e.currentTarget) setIsFullscreen(false); }}>
         <div className="bg-gray-900 border border-gray-700/60 rounded-2xl shadow-2xl flex flex-col"
-          style={{ width: 'min(860px, 92vw)', height: 'min(90vh, 900px)' }}>
+          style={{ width: 'min(53.75rem, 92vw)', height: 'min(90vh, 56.25rem)' }}>
           {/* Header */}
           <div className="px-5 py-3.5 border-b border-gray-700/60 flex items-center justify-between flex-shrink-0">
             <div className="flex items-center gap-2 min-w-0">

@@ -279,7 +279,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     readImageAsBase64: (params: { localPath?: string; remoteUrl?: string }) => ipcRenderer.invoke('file:readImageAsBase64', params),
     repairImage: (params: any) => ipcRenderer.invoke('file:repairImage', params),
     validateLocalImages: (items: any) => ipcRenderer.invoke('file:validateLocalImages', items),
+    captureScreenshot: () => ipcRenderer.invoke('file:captureScreenshot'),
   },
+
 
   // ─── Workflow Engine ─────────────────────────────────────────────
     workflow: {
@@ -426,7 +428,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ─── Facebook ─────────────────────────────────────────────────────
   fb: {
-    addAccount:          (params: { cookie: string }) => ipcRenderer.invoke('fb:addAccount', params),
+    addAccount:          (params: { cookie: string; proxyId?: number | null }) => ipcRenderer.invoke('fb:addAccount', params),
     removeAccount:       (params: { accountId: string }) => ipcRenderer.invoke('fb:removeAccount', params),
     updateCookie:        (params: { accountId: string; cookie: string }) => ipcRenderer.invoke('fb:updateCookie', params),
     refreshProfile:      (params: { accountId: string }) => ipcRenderer.invoke('fb:refreshProfile', params),
@@ -445,7 +447,41 @@ contextBridge.exposeInMainWorld('electronAPI', {
     changeThreadName:    (params: any) => ipcRenderer.invoke('fb:changeThreadName', params),
     changeThreadEmoji:   (params: any) => ipcRenderer.invoke('fb:changeThreadEmoji', params),
     changeNickname:      (params: any) => ipcRenderer.invoke('fb:changeNickname', params),
-    loginWithCredentials:(params: any) => ipcRenderer.invoke('fb:loginWithCredentials', params),
+    loginWithCredentials:(params: any) => ipcRenderer.invoke('fb:loginWithCredentials', params),    fetchThreadMessages:   (params: any) => ipcRenderer.invoke('fb:fetchThreadMessages', params),
+    refreshContactAvatar:  (params: any) => ipcRenderer.invoke('fb:refreshContactAvatar', params),
+    sendTyping:            (params: any) => ipcRenderer.invoke('fb:sendTyping', params),
+    blockUser:             (params: any) => ipcRenderer.invoke('fb:blockUser', params),
+    unblockUser:           (params: any) => ipcRenderer.invoke('fb:unblockUser', params),
+    forwardMessage:        (params: any) => ipcRenderer.invoke('fb:forwardMessage', params),
+    editMessage:           (params: any) => ipcRenderer.invoke('fb:editMessage', params),
+    createPoll:            (params: any) => ipcRenderer.invoke('fb:createPoll', params),
+    getUserInfoFacebookHtml: (params: { accountId: string; userId: string }) => ipcRenderer.invoke('fb:getUserInfoFacebookHtml', params),
+    // ─── Scan Data ────────────────────────────────────────────────
+    scanGroupMembers:     (params: { accountId: string; groupId: string; cursor?: string | null }) => ipcRenderer.invoke('fb:scanGroupMembers', params),
+    scanGroupKeyword:     (params: { accountId: string; keyword: string; cursor?: string | null; filters?: string[]; bsid?: string; tsid?: string }) => ipcRenderer.invoke('fb:scanGroupKeyword', params),
+    scanFanpageKeyword:   (params: { accountId: string; keyword: string; cursor?: string | null; filters?: string[]; bsid?: string; tsid?: string }) => ipcRenderer.invoke('fb:scanFanpageKeyword', params),
+    scanPostTimeline:     (params: { accountId: string; sourceId: string; sourceType: 'profile' | 'fanpage' | 'group'; cursor?: string | null }) => ipcRenderer.invoke('fb:scanPostTimeline', params),
+    scanPostComments:     (params: { accountId: string; postId: string; cursor?: string | null }) => ipcRenderer.invoke('fb:scanPostComments', params),
+    scanPostKeyword:      (params: { accountId: string; keyword: string; cursor?: string | null; filters?: string[]; bsid?: string; tsid?: string }) => ipcRenderer.invoke('fb:scanPostKeyword', params),
+    // Batch
+    scanGroupMembersBatch: (params: { accountId: string; groupIds: string[]; threadCount?: number }) => ipcRenderer.invoke('fb:scanGroupMembersBatch', params),
+    scanPostCommentsBatch: (params: { accountId: string; postIds: string[]; threadCount?: number }) => ipcRenderer.invoke('fb:scanPostCommentsBatch', params),
+    // Scan history
+    saveScanLog:   (params: any) => ipcRenderer.invoke('fb:saveScanLog', params),
+    getScanLogs:   (params: { accountId: string; tabId?: string; limit?: number; offset?: number }) => ipcRenderer.invoke('fb:getScanLogs', params),
+    // Tab management
+    scanSaveTab:       (params: any) => ipcRenderer.invoke('fb:scanSaveTab', params),
+    scanGetTabs:       (params: { accountId: string; status?: string; limit?: number; offset?: number }) => ipcRenderer.invoke('fb:scanGetTabs', params),
+    scanGetTab:        (params: { id: string }) => ipcRenderer.invoke('fb:scanGetTab', params),
+    scanUpdateTabStatus: (params: { id: string; status: string }) => ipcRenderer.invoke('fb:scanUpdateTabStatus', params),
+    scanTouchTab:       (params: { id: string }) => ipcRenderer.invoke('fb:scanTouchTab', params),
+    scanDeleteTab:     (params: { id: string }) => ipcRenderer.invoke('fb:scanDeleteTab', params),
+    scanSaveTabData:   (params: { tabId: string; items: any[]; pageInfo: any }) => ipcRenderer.invoke('fb:scanSaveTabData', params),
+    scanGetTabData:    (params: { tabId: string }) => ipcRenderer.invoke('fb:scanGetTabData', params),
+    scanSaveRequestLog:(params: any) => ipcRenderer.invoke('fb:scanSaveRequestLog', params),
+    scanGetRequestLogs:(params: { tabId: string; limit?: number; offset?: number }) => ipcRenderer.invoke('fb:scanGetRequestLogs', params),
+    scanGetStats:      (params: { accountId: string }) => ipcRenderer.invoke('fb:scanGetStats', params),
+    scanResetCache:() => ipcRenderer.invoke('fb:scanResetCache'),
   },
 
   // ─── ERP ─────────────────────────────────────────────────────────
@@ -529,6 +565,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     notifyMarkRead:     (params: any) => ipcRenderer.invoke('erp:notify:markRead', params),
     notifyMarkAllRead:  (params: any) => ipcRenderer.invoke('erp:notify:markAllRead', params),
     notifyUnreadCount:  (params: any) => ipcRenderer.invoke('erp:notify:unreadCount', params),
+    notifyDelete:       (params: any) => ipcRenderer.invoke('erp:notify:delete', params),
+    notifyDeleteAll:    (params: any) => ipcRenderer.invoke('erp:notify:deleteAll', params),
   },
   lockScreen: {
     status:           () => ipcRenderer.invoke('lockScreen:status'),

@@ -3,6 +3,7 @@ import {useChatStore} from '@/store/chatStore';
 import {useAccountStore} from '@/store/accountStore';
 import {useAppStore} from '@/store/appStore';
 import ipc from '@/lib/ipc';
+import AccountAssignmentPopup from './AccountAssignmentPopup';
 import {SendCardModal} from './GroupModals';
 import {CreatePollDialog, NoteViewModal} from './ChatWindow';
 import BankCardModal from './BankCardModal';
@@ -143,6 +144,9 @@ export default function MessageInput() {
   const [mentions, setMentions] = useState<Array<{ uid: string; pos: number; len: number }>>([]);
   // Clipboard images state: {id, dataUrl, blob}[]
   const [clipboardImages, setClipboardImages] = useState<Array<{ id: string; dataUrl: string; blob: Blob }>>([]);
+  // Drag-and-drop state
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounterRef = useRef(0);
   const [localLabels, setLocalLabels] = useState<LocalLabel[]>([]);
   const [threadLocalLabelIds, setThreadLocalLabelIds] = useState<Set<number>>(new Set());
   const [togglingLocalLabelId, setTogglingLocalLabelId] = useState<number | null>(null);
@@ -152,6 +156,7 @@ export default function MessageInput() {
   const [pinnedCtxMenu, setPinnedCtxMenu] = useState<string | null>(null);
   // AI suggestions dropdown menu
   const [showAiMenu, setShowAiMenu] = useState(false);
+  const [showAiAssignmentPopup, setShowAiAssignmentPopup] = useState(false);
   // Inline sticker suggestions (above input area)
   const [inlineStickerSuggestions, setInlineStickerSuggestions] = useState<any[]>([]);
   const inlineStickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -639,6 +644,126 @@ export default function MessageInput() {
     return { cookies: account.cookies, imei: account.imei, userAgent: account.user_agent };
   };
 
+  // ── Nhận file từ ChatWindow drop (drag-and-drop trên vùng tin nhắn) ──
+  useEffect(() => {
+    const handleDragDropFiles = async (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const files: File[] = detail?.files || [];
+      if (files.length === 0 || !activeThreadId || !activeAccountId) return;
+
+      const auth = getAuth();
+      if (!auth) return;
+
+      // Phân loại files
+      const imageFiles = files.filter(f => f.type.startsWith('image/'));
+      const videoFiles = files.filter(f => f.type.startsWith('video/'));
+      const otherFiles = files.filter(f => !f.type.startsWith('image/') && !f.type.startsWith('video/'));
+
+      // ── Ảnh: thêm vào clipboardImages ──
+      for (const file of imageFiles) {
+        const id = `drop_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const dataUrl = ev.target?.result as string;
+          setClipboardImages(prev => [...prev, { id, dataUrl, blob: file }]);
+        };
+        reader.readAsDataURL(file);
+      }
+
+      // ── Video: gửi trực tiếp ──
+      for (const file of videoFiles) {
+        const tempPath = await saveDroppedFileAsTemp(file);
+        if (!tempPath) continue;
+        setSending(true);
+        try {
+          const quotePayload = buildQuotePayload(replyTo);
+          const metaRes = await ipc.file?.getVideoMeta?.({ filePath: tempPath });
+          let thumbPath: string = metaRes?.thumbPath || '';
+          const duration: number = metaRes?.duration || 0;
+          const width: number = metaRes?.width || 0;
+          const height: number = metaRes?.height || 0;
+
+          if (!thumbPath) {
+            const seekSec = duration > 2 ? 1 : 0;
+            const dataUrl = await extractVideoThumbViaCanvas(tempPath, seekSec);
+            if (dataUrl && dataUrl.length > 100) {
+              const saveRes = await ipc.file?.saveTempBlob?.({ base64: dataUrl, ext: 'jpg' });
+              if (saveRes?.success && saveRes?.filePath) thumbPath = saveRes.filePath;
+            }
+          }
+
+          const ch = activeContact?.channel || 'zalo';
+          if (ch === 'facebook') {
+            // Facebook: gửi video qua sendAttachment với fileType='video'
+            await channelIpc.sendVideo('facebook', {
+              accountId: activeAccountId!,
+              threadId: activeThreadId,
+              threadType: activeThreadType,
+              filePath: tempPath,
+              body: '',
+              quote: quotePayload || undefined,
+            });
+          } else {
+            // Zalo: upload thumb → upload video → send
+            let thumbUrl = '';
+            if (thumbPath) {
+              const uploadRes = await ipc.zalo?.uploadVideoThumb?.({ auth, thumbPath, threadId: activeThreadId, type: activeThreadType });
+              const resp = uploadRes?.response;
+              thumbUrl = resp?.normalUrl || resp?.hdUrl || resp?.url || resp?.thumbUrl || resp?.fileUrl || resp?.href || '';
+            }
+            const uploadVideoRes = await ipc.zalo?.uploadVideoFile?.({ auth, videoPath: tempPath, threadId: activeThreadId, type: activeThreadType });
+            const videoUrl: string = uploadVideoRes?.response?.fileUrl || '';
+            if (!videoUrl) { showNotification('Upload video thất bại', 'error'); continue; }
+            await ipc.zalo?.sendVideo({
+              auth, options: { videoUrl, thumbnailUrl: thumbUrl || videoUrl, duration: duration ? duration * 1000 : undefined, width: width || undefined, height: height || undefined },
+              threadId: activeThreadId, type: activeThreadType,
+              ...(quotePayload ? { quote: quotePayload } : {}),
+            });
+          }
+          if (quotePayload) setReplyTo(null);
+        } catch (err: any) {
+          showNotification('Gửi video thất bại: ' + err.message, 'error');
+        } finally { setSending(false); }
+      }
+
+      // ── File khác: gửi trực tiếp ──
+      for (const file of otherFiles) {
+        if (file.size === 0) continue;
+        const tempPath = await saveDroppedFileAsTemp(file);
+        if (!tempPath) continue;
+        setSending(true);
+        try {
+          const quotePayload = buildQuotePayload(replyTo);
+          const ch = activeContact?.channel || 'zalo';
+          if (ch === 'facebook') {
+            const fileName = file.name;
+            const tempId = `temp_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+            addMessage(activeAccountId!, activeThreadId, {
+              msg_id: tempId, owner_zalo_id: activeAccountId!, thread_id: activeThreadId,
+              thread_type: activeThreadType, sender_id: activeAccountId!, content: `📎 ${fileName}`,
+              msg_type: 'file', timestamp: Date.now(), is_sent: 1, status: 'sending', channel: 'facebook',
+              attachments: JSON.stringify([{ type: 'file', localPath: tempPath, name: fileName }]),
+            });
+            const fileRes = await channelIpc.sendAttachment('facebook', { accountId: activeAccountId!, threadId: activeThreadId, filePath: tempPath, threadType: activeThreadType });
+            if (!fileRes?.success) { showNotification(fileRes?.error || 'Gửi file Facebook thất bại', 'error'); removeMessage(activeAccountId!, activeThreadId, tempId); }
+          } else {
+            await ipc.zalo?.sendFile({
+              auth, threadId: activeThreadId, type: activeThreadType, filePath: tempPath,
+              ...(quotePayload ? { quote: quotePayload } : {}),
+            });
+          }
+          if (quotePayload) setReplyTo(null);
+          showNotification(`Đã gửi file: ${file.name}`, 'success');
+        } catch (err: any) {
+          showNotification('Gửi file thất bại: ' + err.message, 'error');
+        } finally { setSending(false); }
+      }
+    };
+
+    window.addEventListener('chat:dragDropFiles', handleDragDropFiles);
+    return () => window.removeEventListener('chat:dragDropFiles', handleDragDropFiles);
+  }, [activeThreadId, activeAccountId, activeThreadType, replyTo, getAuth, activeContact]);
+
   const handleToggleLocalLabel = useCallback(async (label: LocalLabel) => {
     if (!activeAccountId || !activeThreadId || togglingLocalLabelId !== null) return;
     const exists = threadLocalLabelIds.has(label.id);
@@ -662,7 +787,7 @@ export default function MessageInput() {
   // ─── Keyboard shortcuts for label toggle ─────────────────────────────────────
   useEffect(() => {
     if (!activeAccountId || !activeThreadId) return;
-    
+
     const handleKeyDown = (e: KeyboardEvent) => {
       // Skip if user is typing in an input/textarea/contenteditable
       const target = e.target as HTMLElement;
@@ -670,27 +795,27 @@ export default function MessageInput() {
         // Still allow if it's a modifier key combination (Ctrl/Alt/Meta + key)
         if (!e.ctrlKey && !e.altKey && !e.metaKey) return;
       }
-      
+
       // Check if any label has a shortcut that matches
       for (const label of localLabels) {
         if (label.shortcut && matchesShortcut(e, label.shortcut)) {
           e.preventDefault();
           e.stopPropagation();
-          
+
           // Toggle this label
           const exists = threadLocalLabelIds.has(label.id);
           const action = exists ? 'Gỡ' : 'Gắn';
-          
+
           // Call toggle function
           handleToggleLocalLabel(label).then(() => {
             showNotification(`${action} nhãn "${label.emoji || ''} ${label.name}" thành công`, 'success');
           });
-          
+
           return;
         }
       }
     };
-    
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeAccountId, activeThreadId, localLabels, threadLocalLabelIds, handleToggleLocalLabel, showNotification]);
@@ -1103,29 +1228,38 @@ export default function MessageInput() {
                 }
               }
 
-              let thumbUrl = '';
-              if (thumbPath) {
-                const uploadRes = await ipc.zalo?.uploadVideoThumb?.({ auth, thumbPath, threadId, type: threadType });
-                const resp = uploadRes?.response;
-                thumbUrl = resp?.normalUrl || resp?.hdUrl || resp?.url || resp?.thumbUrl || resp?.fileUrl || resp?.href || '';
+              const ch = activeContact?.channel || 'zalo';
+              if (ch === 'facebook') {
+                await channelIpc.sendVideo('facebook', {
+                  accountId,
+                  threadId,
+                  threadType,
+                  filePath: videoPath,
+                  body: '',
+                });
+              } else {
+                let thumbUrl = '';
+                if (thumbPath) {
+                  const uploadRes = await ipc.zalo?.uploadVideoThumb?.({ auth, thumbPath, threadId, type: threadType });
+                  const resp = uploadRes?.response;
+                  thumbUrl = resp?.normalUrl || resp?.hdUrl || resp?.url || resp?.thumbUrl || resp?.fileUrl || resp?.href || '';
+                }
+                const uploadVideoRes = await ipc.zalo?.uploadVideoFile?.({ auth, videoPath, threadId, type: threadType });
+                const videoUrl: string = uploadVideoRes?.response?.fileUrl || '';
+                if (!videoUrl) throw new Error('Upload video thất bại');
+                await ipc.zalo?.sendVideo({
+                  auth,
+                  options: {
+                    videoUrl,
+                    thumbnailUrl: thumbUrl || videoUrl,
+                    duration: duration ? duration * 1000 : undefined,
+                    width: width || undefined,
+                    height: height || undefined,
+                  },
+                  threadId,
+                  type: threadType,
+                });
               }
-
-              const uploadVideoRes = await ipc.zalo?.uploadVideoFile?.({ auth, videoPath, threadId, type: threadType });
-              const videoUrl: string = uploadVideoRes?.response?.fileUrl || '';
-              if (!videoUrl) throw new Error('Upload video thất bại');
-
-              await ipc.zalo?.sendVideo({
-                auth,
-                options: {
-                  videoUrl,
-                  thumbnailUrl: thumbUrl || videoUrl,
-                  duration: duration ? duration * 1000 : undefined,
-                  width: width || undefined,
-                  height: height || undefined,
-                },
-                threadId,
-                type: threadType,
-              });
               removeMessage(accountId, threadId, tempVidId);
               markReplied(accountId, threadId);
             } catch (e: any) {
@@ -1263,11 +1397,17 @@ export default function MessageInput() {
               msg_type: 'image', timestamp: Date.now(), is_sent: 1, status: 'sending', channel: 'facebook',
               attachments: JSON.stringify(tempPaths.map(fp => ({ type: 'image', localPath: fp }))),
             });
+            // Extract replyToMessageId from quotePayload for batch sends
+            let batchReplyToMsgId: string | undefined;
+            if (quotePayload) {
+              try { const q = JSON.parse(quotePayload); batchReplyToMsgId = q.msgId; } catch {}
+            }
             const batchRes = await ipc.fb?.sendAttachments({
               accountId: activeAccountId!,
               threadId: activeThreadId,
               filePaths: tempPaths,
               typeChat: activeThreadType === 0 ? 'user' : null,
+              ...(batchReplyToMsgId ? { replyToMessageId: batchReplyToMsgId } : {}),
             });
             removeMessage(activeAccountId!, activeThreadId, batchTempId);
             if (!batchRes?.success) showNotification(batchRes?.error || 'Gửi ảnh Facebook thất bại', 'error');
@@ -1296,7 +1436,7 @@ export default function MessageInput() {
       if (linkPayload && !linkPayload.caption && isUrlOnly(msgText)) {
         const ch = activeContact?.channel || 'zalo';
         if (ch === 'facebook') {
-          await channelIpc.sendMessage('facebook', { accountId: activeAccountId, threadId: activeThreadId, body: msgText, threadType: activeThreadType })
+          await channelIpc.sendMessage('facebook', { accountId: activeAccountId, threadId: activeThreadId, body: msgText, threadType: activeThreadType, quote: quotePayload })
             .then((r: any) => { if (!r?.success) showNotification(r?.error || 'Gửi tin nhắn Facebook thất bại', 'error'); });
         } else {
           await ipc.zalo?.sendLink({
@@ -1321,12 +1461,14 @@ export default function MessageInput() {
           msg_id: `temp_${Date.now()}`, owner_zalo_id: activeAccountId, thread_id: activeThreadId,
           thread_type: activeThreadType, sender_id: activeAccountId, content: msgText,
           msg_type: 'text', timestamp: Date.now(), is_sent: 1, status: 'sending', channel: 'facebook',
+          ...(quotePayload ? { quote_data: quotePayload } : {}),
         });
         const fbResult = await channelIpc.sendMessage('facebook', {
           accountId: activeAccountId,
           threadId: activeThreadId,
           body: msgText,
           threadType: activeThreadType,
+          quote: quotePayload,
         });
         if (!fbResult?.success) {
           const errMsg = fbResult?.error || 'Gửi tin nhắn Facebook thất bại';
@@ -1524,54 +1666,55 @@ export default function MessageInput() {
         }
       }
 
-      // Upload thumbnail trước
-      let thumbUrl = '';
-      if (thumbPath) {
-        const uploadRes = await ipc.zalo?.uploadVideoThumb?.({
-          auth, thumbPath, threadId: activeThreadId, type: activeThreadType,
+      const ch = activeContact?.channel || 'zalo';
+      if (ch === 'facebook') {
+        // Facebook: gửi video qua sendAttachment với fileType='video'
+        const result = await channelIpc.sendVideo('facebook', {
+          accountId: activeAccountId!,
+          threadId: activeThreadId,
+          threadType: activeThreadType,
+          filePath: videoPath,
+          body: '',
+          quote: quotePayload || undefined,
         });
-        console.log('[sendVideo] uploadVideoThumb response:', JSON.stringify(uploadRes));
-        // uploadAttachment trả về { normalUrl, hdUrl, thumbUrl, photoId, ... } cho ảnh jpg
-        const resp = uploadRes?.response;
-        thumbUrl =
-          resp?.normalUrl ||
-          resp?.hdUrl ||
-          resp?.url ||
-          resp?.thumbUrl ||
-          resp?.fileUrl ||
-          resp?.href ||
-          '';
-        if (!thumbUrl) {
-          console.warn('[sendVideo] Không lấy được URL thumbnail từ response:', JSON.stringify(uploadRes));
+        if (!result.success) {
+          showNotification(result.error || 'Gửi video Facebook thất bại', 'error');
+          return;
         }
+      } else {
+        // Zalo: upload thumb → upload video → send
+        let thumbUrl = '';
+        if (thumbPath) {
+          const uploadRes = await ipc.zalo?.uploadVideoThumb?.({
+            auth, thumbPath, threadId: activeThreadId, type: activeThreadType,
+          });
+          const resp = uploadRes?.response;
+          thumbUrl = resp?.normalUrl || resp?.hdUrl || resp?.url || resp?.thumbUrl || resp?.fileUrl || resp?.href || '';
+        }
+
+        const uploadVideoRes = await ipc.zalo?.uploadVideoFile?.({
+          auth, videoPath, threadId: activeThreadId, type: activeThreadType,
+        });
+        const videoUrl: string = uploadVideoRes?.response?.fileUrl || '';
+        if (!videoUrl) {
+          showNotification('Upload video thất bại', 'error');
+          return;
+        }
+
+        await ipc.zalo?.sendVideo({
+          auth,
+          options: {
+            videoUrl,
+            thumbnailUrl: thumbUrl || videoUrl,
+            duration: duration ? duration * 1000 : undefined,
+            width: width || undefined,
+            height: height || undefined,
+          },
+          threadId: activeThreadId,
+          type: activeThreadType,
+          ...(quotePayload ? { quote: quotePayload } : {}),
+        });
       }
-
-      // Upload video
-      const uploadVideoRes = await ipc.zalo?.uploadVideoFile?.({
-        auth, videoPath, threadId: activeThreadId, type: activeThreadType,
-      });
-      console.log('[sendVideo] uploadVideoFile response:', JSON.stringify(uploadVideoRes));
-      const videoUrl: string = uploadVideoRes?.response?.fileUrl || '';
-
-      if (!videoUrl) {
-        showNotification('Upload video thất bại', 'error');
-        return;
-      }
-
-      await ipc.zalo?.sendVideo({
-        auth,
-        options: {
-          videoUrl,
-          // Nếu không có thumbnail URL thì dùng videoUrl (Zalo sẽ tự generate hoặc hiện default)
-          thumbnailUrl: thumbUrl || videoUrl,
-          duration: duration ? duration * 1000 : undefined,
-          width: width || undefined,
-          height: height || undefined,
-        },
-        threadId: activeThreadId,
-        type: activeThreadType,
-        ...(quotePayload ? { quote: quotePayload } : {}),
-      });
       if (quotePayload) setReplyTo(null);
       showNotification('Đã gửi video!', 'success');
     } catch (err: any) {
@@ -2010,11 +2153,229 @@ export default function MessageInput() {
     if (e.key === 'Escape' && replyTo) setReplyTo(null);
   };
 
+  // ── Drag-and-drop handlers ────────────────────────────────────────────────
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current += 1;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragging(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDragging(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    dragCounterRef.current = 0;
+
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length === 0) return;
+    if (!activeThreadId || !activeAccountId) return;
+
+    const auth = getAuth();
+    if (!auth) return;
+
+    // Phân loại files
+    const imageFiles = files.filter(f => f.type.startsWith('image/'));
+    const videoFiles = files.filter(f => f.type.startsWith('video/'));
+    const otherFiles = files.filter(f => !f.type.startsWith('image/') && !f.type.startsWith('video/'));
+
+    // ── Xử lý ảnh: thêm vào clipboardImages (giống paste) ──────────
+    for (const file of imageFiles) {
+      const id = `drop_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const dataUrl = ev.target?.result as string;
+        setClipboardImages(prev => [...prev, { id, dataUrl, blob: file }]);
+      };
+      reader.readAsDataURL(file);
+    }
+
+    // ── Xử lý video: gửi trực tiếp (giống handleSendVideo) ──────────
+    for (const file of videoFiles) {
+      const tempPath = await saveDroppedFileAsTemp(file);
+      if (!tempPath) continue;
+      setSending(true);
+      try {
+        const quotePayload = buildQuotePayload(replyTo);
+        const metaRes = await ipc.file?.getVideoMeta?.({ filePath: tempPath });
+        let thumbPath: string = metaRes?.thumbPath || '';
+        const duration: number = metaRes?.duration || 0;
+        const width: number = metaRes?.width || 0;
+        const height: number = metaRes?.height || 0;
+
+        if (!thumbPath) {
+          const seekSec = duration > 2 ? 1 : 0;
+          const dataUrl = await extractVideoThumbViaCanvas(tempPath, seekSec);
+          if (dataUrl && dataUrl.length > 100) {
+            const saveRes = await ipc.file?.saveTempBlob?.({ base64: dataUrl, ext: 'jpg' });
+            if (saveRes?.success && saveRes?.filePath) thumbPath = saveRes.filePath;
+          }
+        }
+
+        const ch = activeContact?.channel || 'zalo';
+        if (ch === 'facebook') {
+          await channelIpc.sendVideo('facebook', {
+            accountId: activeAccountId!,
+            threadId: activeThreadId,
+            threadType: activeThreadType,
+            filePath: tempPath,
+            body: '',
+            quote: quotePayload || undefined,
+          });
+        } else {
+          let thumbUrl = '';
+          if (thumbPath) {
+            const uploadRes = await ipc.zalo?.uploadVideoThumb?.({ auth, thumbPath, threadId: activeThreadId, type: activeThreadType });
+            const resp = uploadRes?.response;
+            thumbUrl = resp?.normalUrl || resp?.hdUrl || resp?.url || resp?.thumbUrl || resp?.fileUrl || resp?.href || '';
+          }
+
+          const uploadVideoRes = await ipc.zalo?.uploadVideoFile?.({ auth, videoPath: tempPath, threadId: activeThreadId, type: activeThreadType });
+          const videoUrl: string = uploadVideoRes?.response?.fileUrl || '';
+          if (!videoUrl) {
+            showNotification('Upload video thất bại', 'error');
+            continue;
+          }
+
+          await ipc.zalo?.sendVideo({
+            auth,
+            options: { videoUrl, thumbnailUrl: thumbUrl || videoUrl, duration: duration ? duration * 1000 : undefined, width: width || undefined, height: height || undefined },
+            threadId: activeThreadId,
+            type: activeThreadType,
+            ...(quotePayload ? { quote: quotePayload } : {}),
+          });
+        }
+        if (quotePayload) setReplyTo(null);
+      } catch (err: any) {
+        showNotification('Gửi video thất bại: ' + err.message, 'error');
+      } finally {
+        setSending(false);
+      }
+    }
+
+    // ── Xử lý file khác: gửi trực tiếp (giống handleSendFile) ───────
+    for (const file of otherFiles) {
+      if (file.size === 0) continue;
+      const tempPath = await saveDroppedFileAsTemp(file);
+      if (!tempPath) continue;
+      setSending(true);
+      try {
+        const quotePayload = buildQuotePayload(replyTo);
+        const ch = activeContact?.channel || 'zalo';
+        if (ch === 'facebook') {
+          const fileName = file.name;
+          const tempId = `temp_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+          addMessage(activeAccountId!, activeThreadId, {
+            msg_id: tempId, owner_zalo_id: activeAccountId!, thread_id: activeThreadId,
+            thread_type: activeThreadType, sender_id: activeAccountId!, content: `📎 ${fileName}`,
+            msg_type: 'file', timestamp: Date.now(), is_sent: 1, status: 'sending', channel: 'facebook',
+            attachments: JSON.stringify([{ type: 'file', localPath: tempPath, name: fileName }]),
+          });
+          const fileRes = await channelIpc.sendAttachment('facebook', { accountId: activeAccountId!, threadId: activeThreadId, filePath: tempPath, threadType: activeThreadType });
+          if (!fileRes?.success) {
+            showNotification(fileRes?.error || 'Gửi file Facebook thất bại', 'error');
+            removeMessage(activeAccountId!, activeThreadId, tempId);
+          }
+        } else {
+          await ipc.zalo?.sendFile({
+            auth, threadId: activeThreadId, type: activeThreadType, filePath: tempPath,
+            ...(quotePayload ? { quote: quotePayload } : {}),
+          });
+        }
+        if (quotePayload) setReplyTo(null);
+        showNotification(`Đã gửi file: ${file.name}`, 'success');
+      } catch (err: any) {
+        showNotification('Gửi file thất bại: ' + err.message, 'error');
+      } finally {
+        setSending(false);
+      }
+    }
+  }, [activeThreadId, activeAccountId, activeThreadType, replyTo, getAuth, activeContact, sending]);
+
+  /** Lưu file kéo thả thành file tạm trên disk để gửi */
+  const saveDroppedFileAsTemp = async (file: File): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64 = reader.result as string;
+        const ext = file.name.split('.').pop() || 'file';
+        try {
+          // Gửi tên file gốc để giữ nguyên tên khi lưu tạm
+          const res = await ipc.file?.saveTempBlob?.({ base64, ext, filename: file.name });
+          if (res?.success && res?.filePath) resolve(res.filePath);
+          else resolve(null);
+        } catch {
+          resolve(null);
+        }
+      };
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(file);
+    });
+  };
+
   const account = getActiveAccount();
   if (!activeThreadId) return null;
 
   return (
-    <div className="border-t border-gray-700 bg-gray-800 flex-shrink-0">
+    <div
+      className="border-t border-gray-700 bg-gray-800 flex-shrink-0 relative"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {/* Drag-overlay */}
+      {isDragging && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-gray-900/80 backdrop-blur-sm rounded-lg border-2 border-dashed border-blue-500 pointer-events-none"
+          onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onDrop={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        >
+          <div className="flex flex-col items-center gap-3 text-center">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="1.5" className="drop-shadow-lg">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p className="text-blue-400 font-medium text-sm">Thả file / ảnh để gửi</p>
+            <p className="text-gray-500 text-xs">Hỗ trợ ảnh, video, file</p>
+          </div>
+        </div>
+      )}
+
+      {/* AI Quick Settings — always visible when AI is enabled */}
+      {activeAccountId && activeThreadId && !isAiSuggestDisabled(activeAccountId, activeThreadId) && (
+        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700">
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowAiAssignmentPopup(true); }}
+            className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-blue-400 transition-colors cursor-pointer"
+            title="Tuỳ chỉnh trợ lý cho hội thoại này"
+          >
+            <span className="text-[12px]">⚙</span>
+            <span>Tuỳ chỉnh nhanh cho hội thoại hiện tại</span>
+          </button>
+        </div>
+      )}
+
       {/* AI Suggestions bar */}
       {activeAccountId && activeThreadId && !isAiSuggestDisabled(activeAccountId, activeThreadId) && (aiSuggestions.length > 0 || aiSuggestionsLoading) && (
         <div className="ai-suggestion-bar border-b overflow-x-auto">
@@ -2651,7 +3012,7 @@ export default function MessageInput() {
           <div
             ref={mentionListRef}
             className="absolute bottom-full left-3 right-3 mb-1 bg-gray-800 border border-gray-600 rounded-xl shadow-2xl z-30 overflow-hidden"
-            style={{ maxHeight: '240px', overflowY: 'auto' }}
+            style={{ maxHeight: '15rem', overflowY: 'auto' }}
           >
             <p className="text-xs text-gray-500 px-3 py-1.5 border-b border-gray-700 sticky top-0 bg-gray-800 z-10">
               Nhắc đến thành viên{mentionSearch ? ` — "${mentionSearch}"` : ''}
@@ -2676,7 +3037,7 @@ export default function MessageInput() {
         )}
 
         {/* Rich-text editor (contenteditable) */}
-        <div className="relative flex-1" style={{ minHeight: '36px', maxHeight: '128px' }}>
+        <div className="relative flex-1" style={{ minHeight: '2.25rem', maxHeight: '8rem' }}>
           {/* Placeholder */}
           {!text && (
             <span
@@ -2706,7 +3067,7 @@ export default function MessageInput() {
               }
             }}
             className="w-full bg-transparent text-gray-200 text-sm focus:outline-none overflow-y-auto"
-            style={{ minHeight: '32px', maxHeight: '128px', wordBreak: 'break-word', whiteSpace: 'pre-wrap', lineHeight: '1.5' }}
+            style={{ minHeight: '2rem', maxHeight: '8rem', wordBreak: 'break-word', whiteSpace: 'pre-wrap', lineHeight: '1.5' }}
             spellCheck={false}
           />
         </div>
@@ -2906,9 +3267,9 @@ const ToolbarBtn = React.forwardRef<HTMLButtonElement, {
 function isImageMsg(msgType: string, content: string): boolean {
   // Loại trừ các msgType không phải ảnh
   if (['share.file', 'share.link', 'file', 'chat.voice'].includes(msgType)) return false;
-  
+
   if (msgType === 'photo' || msgType === 'image' || msgType === 'chat.photo') return true;
-  
+
   try {
     const parsed = JSON.parse(content);
     if (parsed && typeof parsed === 'object') {
@@ -2917,13 +3278,13 @@ function isImageMsg(msgType: string, content: string): boolean {
       if (typeof paramsObj === 'string') {
         try { paramsObj = JSON.parse(paramsObj); } catch { paramsObj = null; }
       }
-      
+
       // Nếu có title + href nhưng KHÔNG có params ảnh (hd/rawUrl) → đây là link/file
       if (parsed.title && parsed.href) {
         const hasImageParams = !!(paramsObj?.hd || paramsObj?.rawUrl);
         if (!hasImageParams) return false;
       }
-      
+
       // Có params ảnh hoặc thumb hoặc href (không có title) → ảnh
       return !!(paramsObj?.hd || paramsObj?.rawUrl || parsed.thumb || (parsed.href && !parsed.title));
     }
@@ -2956,7 +3317,7 @@ function extractReplyImages(content: string, attachments?: string): string[] {
 
 function parseReplyContent(content: string, msgType?: string): string {
   if (!content || content === 'null') return '[Tin nhắn]';
-  
+
   // Ưu tiên sử dụng msgType nếu có
   if (msgType === 'photo' || msgType === 'image' || msgType === 'chat.photo') return '[Hình ảnh]';
   if (msgType === 'chat.sticker') return '[Sticker]';
@@ -2966,7 +3327,7 @@ function parseReplyContent(content: string, msgType?: string): string {
   if (msgType === 'chat.webcontent') {
     try { if (JSON.parse(content)?.action === 'zinstant.bankcard') return '🏦 [Tài khoản ngân hàng]'; } catch {}
   }
-  
+
   // Với share.file/share.link: parse content để lấy title
   if (msgType === 'share.file' || msgType === 'share.link' || msgType === 'file') {
     try {
@@ -2977,23 +3338,23 @@ function parseReplyContent(content: string, msgType?: string): string {
     } catch {}
     return msgType === 'share.link' ? '[Link]' : '[File]';
   }
-  
+
   // Phân tích content để xác định loại
   try {
     const parsed = JSON.parse(content);
     if (typeof parsed === 'string') return parsed;
     if (typeof parsed !== 'object' || !parsed) return String(parsed);
-    
+
     // Parse params nếu có
     let paramsObj = parsed.params;
     if (typeof paramsObj === 'string') {
       try { paramsObj = JSON.parse(paramsObj); } catch { paramsObj = null; }
     }
-    
+
     // 1. Kiểm tra text message trước
     if (parsed?.content && typeof parsed.content === 'string') return parsed.content;
     if (parsed?.msg && typeof parsed.msg === 'string') return parsed.msg;
-    
+
     // 2. Kiểm tra LINK/FILE: có title + href nhưng KHÔNG có params.hd/rawUrl
     if (parsed.title && parsed.href) {
       const hasImageParams = !!(paramsObj?.hd || paramsObj?.rawUrl);
@@ -3001,13 +3362,13 @@ function parseReplyContent(content: string, msgType?: string): string {
         return `📎 ${parsed.title}`;
       }
     }
-    
+
     // 3. Kiểm tra HÌNH ẢNH: có params.hd/rawUrl hoặc thumb
     const hasImageData = !!(paramsObj?.hd || paramsObj?.rawUrl || parsed.thumb || (parsed.href && !parsed.title));
     if (hasImageData) {
       return '[Hình ảnh]';
     }
-    
+
     return '[Tin nhắn]';
   } catch { return content; }
 }
@@ -3376,7 +3737,7 @@ function StickerPicker({
     <div
       ref={pickerRef}
       className="absolute bottom-12 left-0 w-96 bg-gray-800 border border-gray-600 rounded-2xl shadow-2xl z-30 flex flex-col overflow-hidden"
-      style={{ maxHeight: '440px' }}
+      style={{ maxHeight: '27.5rem' }}
       onClick={(e) => e.stopPropagation()}
     >
       {/* Tabs */}

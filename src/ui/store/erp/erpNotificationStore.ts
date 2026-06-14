@@ -9,6 +9,8 @@ interface ErpNotificationState {
   loadUnreadCount: (recipientId: string) => Promise<void>;
   markRead: (ids: number[]) => Promise<void>;
   markAllRead: (recipientId: string) => Promise<void>;
+  deleteNotifications: (ids: number[]) => Promise<void>;
+  deleteAllNotifications: (recipientId: string) => Promise<void>;
   _onNewNotification: (n: ErpNotification) => void;
 }
 
@@ -37,6 +39,19 @@ export const useErpNotificationStore = create<ErpNotificationState>((set, get) =
   markAllRead: async (recipientId) => {
     await ipc.erp?.notifyMarkAllRead({ recipientId });
     set(s => ({ inbox: s.inbox.map(n => ({ ...n, read: 1 })), unreadCount: 0 }));
+  },
+
+  deleteNotifications: async (ids) => {
+    await ipc.erp?.notifyDelete({ ids });
+    set(s => ({
+      inbox: s.inbox.filter(n => !ids.includes(n.id)),
+      unreadCount: s.inbox.reduce((c, n) => c + (!ids.includes(n.id) && !n.read ? 1 : 0), 0),
+    }));
+  },
+
+  deleteAllNotifications: async (recipientId) => {
+    await ipc.erp?.notifyDeleteAll({ recipientId });
+    set({ inbox: [], unreadCount: 0 });
   },
 
   _onNewNotification: (n) => set(s => ({

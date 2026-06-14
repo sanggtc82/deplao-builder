@@ -1,30 +1,30 @@
 /**
  * FacebookThreadManager.ts
- * Port từ Python _features/_thread/* + _messaging/_message_requests.py
- * Quản lý threads: lấy danh sách, thay đổi tên/emoji/nickname
+ * Port t Python _features/_thread/* + _messaging/_message_requests.py
+ * Qun l threads: ly danh sch, thay i tn/emoji/nickname
  */
 
 import axios from 'axios';
 import {
   FBSessionData, FBThread, FBThreadDataResult, FBMessageRequest
 } from './FacebookTypes';
-import { buildFormData, buildPostConfig, rateLimitDelay } from './FacebookUtils';
+import { buildFormData, buildPostConfig, parseFBResponse, rateLimitDelay } from './FacebookUtils';
 import Logger from '../../utils/Logger';
 
 const GRAPHQL_BATCH_URL = 'https://www.facebook.com/api/graphqlbatch/';
 const GRAPHQL_URL = 'https://www.facebook.com/webgraphql/mutation/';
 
-// Doc IDs từ Facebook (tìm từ Python source)
+// Doc IDs t Facebook (tm t Python source)
 const THREAD_LIST_DOC_ID = '3336396659757871';
 const CHANGE_THREAD_NAME_DOC_ID = '1768656823415255';
 const CHANGE_EMOJI_DOC_ID = '1498317363570230';
 const CHANGE_NICKNAME_DOC_ID = '1349374845128082';
 
 /**
- * Lấy danh sách threads từ INBOX
- * Trả về thread list + last_seq_id (cần cho MQTT)
+ * Ly danh sch threads t INBOX
+ * Tr v thread list + last_seq_id (cn cho MQTT)
  */
-export async function getThreadList(dataFB: FBSessionData, tags: string[] = ['INBOX']): Promise<FBThreadDataResult> {
+export async function getThreadList(dataFB: FBSessionData, tags: string[] = ['INBOX'], httpsAgent?: any): Promise<FBThreadDataResult> {
   const form = buildFormData(dataFB, { requireGraphql: false });
   form['queries'] = JSON.stringify({
     o0: {
@@ -39,10 +39,11 @@ export async function getThreadList(dataFB: FBSessionData, tags: string[] = ['IN
     },
   });
 
-  const config = buildPostConfig(GRAPHQL_BATCH_URL, form, dataFB.cookieFacebook);
+  const config = buildPostConfig(GRAPHQL_BATCH_URL, form, dataFB.cookieFacebook, undefined, httpsAgent);
   const response = await axios.post(config.url, config.data, {
     headers: config.headers,
     timeout: config.timeout,
+    ...(httpsAgent ? { httpsAgent } : {}),
   });
 
   let responseText = response.data as string;
@@ -85,11 +86,11 @@ export async function getThreadList(dataFB: FBSessionData, tags: string[] = ['IN
 }
 
 /**
- * Lấy last_seq_id — cần thiết để khởi động MQTT listener
+ * Ly last_seq_id cn thit khi ng MQTT listener
  */
-export async function getLastSeqId(dataFB: FBSessionData): Promise<string> {
+export async function getLastSeqId(dataFB: FBSessionData, httpsAgent?: any): Promise<string> {
   try {
-    const result = await getThreadList(dataFB);
+    const result = await getThreadList(dataFB, undefined, httpsAgent);
     return result.last_seq_id;
   } catch (err: any) {
     Logger.warn(`[FacebookThreadManager] getLastSeqId error: ${err.message}`);
@@ -98,7 +99,7 @@ export async function getLastSeqId(dataFB: FBSessionData): Promise<string> {
 }
 
 /**
- * Parse thread nodes thành FBThread array
+ * Parse thread nodes thnh FBThread array
  */
 export function parseThreadNodes(dataGet: string, accountId: string, fbUserId?: string): FBThread[] {
   try {
@@ -114,7 +115,7 @@ export function parseThreadNodes(dataGet: string, accountId: string, fbUserId?: 
       let avatarUrl = '';
 
       if (isGroup) {
-        // Group: node.name is often null — build from participant names (exclude self)
+        // Group: node.name is often null build from participant names (exclude self)
         if (!threadName) {
           const otherNames = participants
             .map((e: any) => e?.node?.messaging_actor)
@@ -122,7 +123,7 @@ export function parseThreadNodes(dataGet: string, accountId: string, fbUserId?: 
             .map((a: any) => a?.name || '')
             .filter(Boolean)
             .slice(0, 4);
-          threadName = otherNames.length > 0 ? otherNames.join(', ') : 'Nhóm không tên';
+          threadName = otherNames.length > 0 ? otherNames.join(', ') : 'Nhm khng tn';
         }
         // Group avatar: use thread image_src if available, else first participant avatar
         avatarUrl = node?.image?.uri || '';
@@ -145,7 +146,7 @@ export function parseThreadNodes(dataGet: string, accountId: string, fbUserId?: 
         threadName = actor?.name || '';
         avatarUrl = actor?.big_image_src?.uri || actor?.profile_picture?.uri || '';
       }
-      if (!threadName) threadName = 'Không có tên';
+      if (!threadName) threadName = 'Khng c tn';
 
       return {
         id: String(threadId || ''),
@@ -170,9 +171,9 @@ export function parseThreadNodes(dataGet: string, accountId: string, fbUserId?: 
 }
 
 /**
- * Lấy tin nhắn chờ (Pending inbox)
+ * Ly tin nhn ch (Pending inbox)
  */
-export async function getMessageRequests(dataFB: FBSessionData): Promise<FBMessageRequest[]> {
+export async function getMessageRequests(dataFB: FBSessionData, httpsAgent?: any): Promise<FBMessageRequest[]> {
   const form = buildFormData(dataFB, { requireGraphql: false });
   form['queries'] = JSON.stringify({
     o0: {
@@ -188,10 +189,11 @@ export async function getMessageRequests(dataFB: FBSessionData): Promise<FBMessa
   });
 
   try {
-    const config = buildPostConfig(GRAPHQL_BATCH_URL, form, dataFB.cookieFacebook);
+    const config = buildPostConfig(GRAPHQL_BATCH_URL, form, dataFB.cookieFacebook, undefined, httpsAgent);
     const response = await axios.post(config.url, config.data, {
       headers: config.headers,
       timeout: config.timeout,
+      ...(httpsAgent ? { httpsAgent } : {}),
     });
 
     const dataGet = JSON.parse((response.data as string).split('{"successful_results"')[0]);
@@ -216,12 +218,13 @@ export async function getMessageRequests(dataFB: FBSessionData): Promise<FBMessa
 }
 
 /**
- * Đổi tên nhóm
+ * i tn nh
  */
 export async function changeThreadName(
   dataFB: FBSessionData,
   threadId: string,
-  name: string
+  name: string,
+  httpsAgent?: any
 ): Promise<boolean> {
   await rateLimitDelay();
   const form = buildFormData(dataFB, {
@@ -250,12 +253,13 @@ export async function changeThreadName(
 }
 
 /**
- * Đổi emoji nhóm
+ * i emoji nh
  */
 export async function changeThreadEmoji(
   dataFB: FBSessionData,
   threadId: string,
-  emoji: string
+  emoji: string,
+  httpsAgent?: any
 ): Promise<boolean> {
   await rateLimitDelay();
   const form = buildFormData(dataFB, {
@@ -284,13 +288,14 @@ export async function changeThreadEmoji(
 }
 
 /**
- * Đổi nickname thành viên trong nhóm
+ * i nickname thnh vin trong nh
  */
 export async function changeNickname(
   dataFB: FBSessionData,
   threadId: string,
   userId: string,
-  nickname: string
+  nickname: string,
+  httpsAgent?: any
 ): Promise<boolean> {
   await rateLimitDelay();
   const form = buildFormData(dataFB, {
@@ -320,3 +325,371 @@ export async function changeNickname(
   }
 }
 
+/**
+ * Ly tin nhn lch s t Facebook API (C7)
+ * S dng GraphQL batch query (ging getThreadList). H tr cursor-based pagination.
+ */
+export async function fetchThreadMessages(
+  dataFB: FBSessionData,
+  threadId: string,
+  limit: number = 50,
+  beforeCursor?: string | null,
+  httpsAgent?: any
+): Promise<{
+  success: boolean;
+  messages?: any[];
+  cursor?: { before?: string; after?: string; hasMore?: boolean };
+  error?: string;
+}> {
+  await rateLimitDelay();
+
+  const queryParams: Record<string, any> = {
+    id: String(threadId),
+    messageLimit: limit,
+    loadMessages: true,
+    loadAttachment: true,
+    loadReactions: true,
+  };
+  if (beforeCursor) {
+    queryParams.before = beforeCursor;
+  }
+
+  const form = buildFormData(dataFB, { docId: '5587413956701165' });
+  form['queries'] = JSON.stringify({
+    o0: {
+      doc_id: '5587413956701165',
+      query_params: queryParams,
+    },
+  });
+
+  try {
+    const config = buildPostConfig(GRAPHQL_BATCH_URL, form, dataFB.cookieFacebook, undefined, httpsAgent);
+    const response = await axios.post(config.url, config.data, {
+      headers: config.headers,
+      timeout: config.timeout,
+      ...(httpsAgent ? { httpsAgent } : {}),
+    });
+
+    let responseText = response.data as string;
+    if (typeof responseText === 'string') {
+      responseText = responseText.replace(/^for\s*\(;;\);/, '').trim();
+    }
+    const dataGet = responseText.split('{"successful_results"')[0];
+
+    const parsed = JSON.parse(dataGet);
+
+    // Detect GraphQL-level errors
+    if (parsed?.o0?.error) {
+      const err = parsed.o0.error;
+      const errMsg = err.summary || err.description || err.message || `GraphQL error`;
+      Logger.warn(`[FB:fetchThreadMessages] GraphQL error: ${errMsg}. threadId=${threadId}`);
+      return { success: false, messages: [], cursor: undefined, error: errMsg };
+    }
+
+    const thread = parsed?.o0?.data?.node || parsed?.o0?.data?.message_thread;
+    const messageEdges = thread?.messages?.edges || [];
+    const pageInfo = thread?.messages?.pageInfo || {};
+
+    const messages = messageEdges.map((edge: any) => {
+      const node = edge.node || edge;
+
+      // Extract replied_to_message info (Facebook GraphQL field)
+      const repliedNode = node.replied_to_message || node.repliedToMessage;
+      const replyToMessageId: string | undefined =
+        repliedNode?.message_id || repliedNode?.id || repliedNode?.messageMetadata?.messageId || undefined;
+      const replyToSenderId: string | undefined =
+        repliedNode?.message_sender?.id || repliedNode?.sender_id ||
+        repliedNode?.messageMetadata?.actorFbId || undefined;
+
+      return {
+        id: node.message_id || node.id,
+        body: node.body?.text || node.body || null,
+        timestampMs: parseInt(node.timestamp_precise || node.timestamp || '0'),
+        senderId: node.message_sender?.id || node.sender_id || '',
+        senderName: node.message_sender?.name || node.sender_name || '',
+        attachments: (node.blob_attachments || []).map((a: any) => ({
+          id: a.attachment_fbid || a.id,
+          type: a.__typename?.replace('Message', '').toLowerCase() || 'file',
+          url: a.large_preview?.uri || a.url || a.preview?.uri || null,
+          name: a.filename || a.name,
+          fileSize: a.filesize,
+          mimeType: a.content_type,
+        })),
+        reactions: (node.reactions?.nodes || []).map((r: any) => ({
+          userId: r.user?.id || '',
+          emoji: r.reaction || '',
+        })),
+        isUnsent: node.message_type === 'unsent',
+        timestamp: parseInt(node.timestamp_precise || node.timestamp || '0'),
+        replyToMessageId,
+        replyToSenderId,
+      };
+    });
+
+    return {
+      success: true,
+      messages,
+      cursor: {
+        before: pageInfo.startCursor,
+        after: pageInfo.endCursor,
+        hasMore: pageInfo.hasNextPage,
+      },
+    };
+  } catch (err: any) {
+    Logger.error(`[FacebookThreadManager] fetchThreadMessages error: ${err.message}`);
+    return { success: false, messages: [], error: err.message };
+  }
+}
+
+/**
+ * Thm admin cho nh (N3)
+ */
+export async function addGroupAdmin(
+  dataFB: FBSessionData,
+  threadId: string,
+  userId: string,
+): Promise<{ success: boolean; error?: string }> {
+  return changeGroupAdminStatus(dataFB, threadId, userId, true);
+}
+
+/**
+ * Xa admin khi nh (N3)
+ */
+export async function removeGroupAdmin(
+  dataFB: FBSessionData,
+  threadId: string,
+  userId: string,
+): Promise<{ success: boolean; error?: string }> {
+  return changeGroupAdminStatus(dataFB, threadId, userId, false);
+}
+
+async function changeGroupAdminStatus(
+  dataFB: FBSessionData,
+  threadId: string,
+  userId: string,
+  add: boolean,
+): Promise<{ success: boolean; error?: string }> {
+  await rateLimitDelay();
+
+  const form = buildFormData(dataFB, {
+    friendlyName: 'CometGroupAdminChangeMutation',
+    docId: add ? '5257785392787132' : '2039160555321787',
+  });
+
+  form['variables'] = JSON.stringify({
+    data: {
+      thread_id: String(threadId),
+      user_id: String(userId),
+      admin_type: 'GROUP',
+      client_mutation_id: '1',
+      actor_id: dataFB.FacebookID,
+    }
+  });
+  form['dpr'] = '1';
+
+  try {
+    const formBody = new URLSearchParams(form).toString();
+    await axios.post(GRAPHQL_URL, formBody, {
+      headers: {
+        'Host': 'www.facebook.com',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Origin': 'https://www.facebook.com',
+        'Referer': 'https://www.facebook.com/',
+        'Cookie': dataFB.cookieFacebook,
+      },
+      timeout: 30000,
+    });
+    return { success: true };
+  } catch (err: any) {
+    Logger.error(`[FacebookThreadManager] changeGroupAdmin error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * i ch duyt thnh vin (N3)
+ * approved: true = bt duyt, false = tt duyt
+ */
+export async function changeApprovalMode(
+  dataFB: FBSessionData,
+  threadId: string,
+  approved: boolean,
+  httpsAgent?: any
+): Promise<{ success: boolean; error?: string }> {
+  await rateLimitDelay();
+
+  const form = buildFormData(dataFB, {
+    friendlyName: 'CometGroupApprovalMutation',
+    docId: '1060150802166515',
+  });
+
+  form['variables'] = JSON.stringify({
+    data: {
+      thread_id: String(threadId),
+      approval_mode: approved,
+      client_mutation_id: '1',
+      actor_id: dataFB.FacebookID,
+    }
+  });
+  form['dpr'] = '1';
+
+  try {
+    const formBody = new URLSearchParams(form).toString();
+    await axios.post(GRAPHQL_URL, formBody, {
+      headers: {
+        'Host': 'www.facebook.com',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Origin': 'https://www.facebook.com',
+        'Referer': 'https://www.facebook.com/',
+        'Cookie': dataFB.cookieFacebook,
+      },
+      timeout: 30000,
+    });
+    return { success: true };
+  } catch (err: any) {
+    Logger.error(`[FacebookThreadManager] changeApprovalMode error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Duy t chi thnh vin vo nh (N3)
+ */
+export async function approvePendingMember(
+  dataFB: FBSessionData,
+  threadId: string,
+  userId: string,
+  approve: boolean,
+  httpsAgent?: any
+): Promise<{ success: boolean; error?: string }> {
+  await rateLimitDelay();
+
+  const form = buildFormData(dataFB, {
+    friendlyName: 'CometGroupApprovePendingMemberMutation',
+    docId: approve ? '2261853580790833' : '1205134861206560',
+  });
+
+  form['variables'] = JSON.stringify({
+    data: {
+      thread_id: String(threadId),
+      user_id: String(userId),
+      client_mutation_id: '1',
+      actor_id: dataFB.FacebookID,
+    }
+  });
+  form['dpr'] = '1';
+
+  try {
+    const formBody = new URLSearchParams(form).toString();
+    await axios.post(GRAPHQL_URL, formBody, {
+      headers: {
+        'Host': 'www.facebook.com',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Origin': 'https://www.facebook.com',
+        'Referer': 'https://www.facebook.com/',
+        'Cookie': dataFB.cookieFacebook,
+      },
+      timeout: 30000,
+    });
+    return { success: true };
+  } catch (err: any) {
+    Logger.error(`[FacebookThreadManager] approvePendingMember error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Ly link mi nh (N3)
+ */
+export async function getGroupLink(
+  dataFB: FBSessionData,
+  threadId: string,
+  httpsAgent?: any
+): Promise<{ success: boolean; link?: string; error?: string }> {
+  await rateLimitDelay();
+
+  const form = buildFormData(dataFB, {
+    friendlyName: 'CometGroupLinkQuery',
+    docId: '2212560156192546',
+  });
+
+  form['variables'] = JSON.stringify({
+    data: {
+      thread_id: String(threadId),
+      actor_id: dataFB.FacebookID,
+    }
+  });
+  form['dpr'] = '1';
+
+  try {
+    const formBody = new URLSearchParams(form).toString();
+    const response = await axios.post(GRAPHQL_URL, formBody, {
+      headers: {
+        'Host': 'www.facebook.com',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Origin': 'https://www.facebook.com',
+        'Referer': 'https://www.facebook.com/',
+        'Cookie': dataFB.cookieFacebook,
+      },
+      timeout: 30000,
+    });
+
+    const parsed = parseFBResponse(response.data as string);
+    const link = parsed?.data?.node?.group?.group_invite_link?.url
+      || parsed?.data?.group?.invite_link;
+    return { success: true, link: link ? String(link) : undefined };
+  } catch (err: any) {
+    Logger.error(`[FacebookThreadManager] getGroupLink error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * t link mi nh (N3)
+ */
+export async function setGroupLink(
+  dataFB: FBSessionData,
+  threadId: string,
+  enable: boolean,
+  httpsAgent?: any
+): Promise<{ success: boolean; error?: string }> {
+  await rateLimitDelay();
+
+  const form = buildFormData(dataFB, {
+    friendlyName: 'CometGroupSetLinkMutation',
+    docId: enable ? '1737162272258162' : '4417237731557110',
+  });
+
+  form['variables'] = JSON.stringify({
+    data: {
+      thread_id: String(threadId),
+      enable,
+      client_mutation_id: '1',
+      actor_id: dataFB.FacebookID,
+    }
+  });
+  form['dpr'] = '1';
+
+  try {
+    const formBody = new URLSearchParams(form).toString();
+    await axios.post(GRAPHQL_URL, formBody, {
+      headers: {
+        'Host': 'www.facebook.com',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Origin': 'https://www.facebook.com',
+        'Referer': 'https://www.facebook.com/',
+        'Cookie': dataFB.cookieFacebook,
+      },
+      timeout: 30000,
+    });
+    return { success: true };
+  } catch (err: any) {
+    Logger.error(`[FacebookThreadManager] setGroupLink error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}

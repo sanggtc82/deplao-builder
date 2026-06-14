@@ -159,6 +159,14 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
                 <div className="absolute -bottom-0.5 -left-0.5 z-10 pointer-events-none">
                   <ChannelBadge channel={(account.channel as any) || 'zalo'} size="xs" />
                 </div>
+                {/* Disconnected indicator (merged inbox) */}
+                {!account.isConnected && (
+                  <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-gray-800 rounded-full border-2 border-gray-900 flex items-center justify-center z-10 pointer-events-none" title="Chưa kết nối">
+                    <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="text-red-400">
+                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  </span>
+                )}
               </div>
             );
           })}
@@ -241,7 +249,7 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
                 {account.is_business ? (
                   <span
                     className="absolute -bottom-1 -left-1 bg-amber-500 text-white text-[7px] font-bold rounded-full border border-gray-900 z-10 leading-none flex items-center justify-center"
-                    style={{ minWidth: 14, height: 14, padding: '0 2px' }}
+                    style={{ minWidth: '0.875rem', height: '0.875rem', padding: '0 0.125rem' }}
                     title="Zalo Business"
                   >
                     💼
@@ -252,6 +260,15 @@ export default function Sidebar({ onAddAccount }: SidebarProps) {
                 <div className="absolute -bottom-0.5 -left-0.5 z-10">
                   <ChannelBadge channel={(account.channel as any) || 'zalo'} size="xs" />
                 </div>
+
+                {/* ── Disconnected indicator (bottom-right) ── */}
+                {!account.isConnected && !listenerDead ? (
+                  <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-gray-800 rounded-full border-2 border-gray-900 flex items-center justify-center z-10" title="Chưa kết nối">
+                    <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="text-red-400">
+                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  </span>
+                ) : null}
               </button>
             </div>
           );

@@ -108,7 +108,7 @@ export default function App() {
     showGroupBoard, setShowGroupBoard,
     showIntegrationQuickPanel, toggleIntegrationQuickPanel,
     showAIQuickPanel, toggleAIQuickPanel,
-    openQuickChat, quickChatOpen, theme
+    openQuickChat, quickChatOpen, theme, fontSizeScale
   } = useAppStore();
   const { setAccounts, updateListenerActive, accounts } = useAccountStore();
   const { setContacts } = useChatStore();
@@ -124,6 +124,11 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  // ─── Sync font size scale to <html> element ──────────────────────────────
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${16 * fontSizeScale}px`;
+  }, [fontSizeScale]);
 
   // ─── Lock screen: check status on mount ─────────────────────────────────
   useEffect(() => {
@@ -1278,7 +1283,7 @@ export default function App() {
               : 'bg-gray-900 border border-gray-700/70 shadow-black/60'
             }`}
           style={{
-            borderLeftWidth: 4,
+            borderLeftWidth: '0.25rem',
             borderLeftStyle: 'solid',
             borderLeftColor:
               notification.type === 'success' ? '#22c55e'

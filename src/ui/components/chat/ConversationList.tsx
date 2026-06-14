@@ -10,11 +10,12 @@ import { showConfirm } from '../common/ConfirmDialog';
 import LabelPicker, { EditLabelsModal } from './LabelPicker';
 import AddFriendModal from '../common/AddFriendModal';
 import GroupAvatar from '../common/GroupAvatar';
+import { toLocalMediaUrl } from '@/lib/localMedia';
 import GlobalSearchPanel from './GlobalSearchPanel';
 import useIsMobile from '@/hooks/useIsMobile';
 import { syncZaloGroups, MemberPlaceholder } from '@/lib/zaloGroupUtils';
 import { ChannelBadgeOverlay } from '../common/ChannelBadge';
-import type { Channel } from '@/../configs/channelConfig';
+import { getCapability, channelSupports, type Channel } from '@/../configs/channelConfig';
 import { extractUserProfile } from '../../../utils/profileUtils';
 import { refreshContactAlias } from '../../hooks/useZaloEvents';
 
@@ -68,6 +69,9 @@ export default function ConversationList() {
   const { contacts, setActiveThread, activeThreadId, activeThreadType, setMessages, updateContact, clearUnread, removeContact, drafts, draftTimestamps } = useChatStore();
   const { syncRepliedState, saveAccountThread } = useChatStore();
   const { activeAccountId, accounts: allAccountsList, setActiveAccount } = useAccountStore();
+  const activeAccountObj = allAccountsList.find(a => a.zalo_id === activeAccountId);
+  const isFbLabel = (activeAccountObj?.channel || 'zalo') === 'facebook';
+  const channelCap = getCapability((activeAccountObj?.channel || 'zalo') as Channel);
   const { labels: allLabels, setLabels, showNotification, setMuted, clearMuted, isMuted: isMutedFn, groupInfoCache, setGroupInfo,
     othersConversations: allOthers, loadFlags, addToOthers, removeFromOthers,
     mergedInboxMode, mergedInboxAccounts, mergedInboxFilterAccount, setMobileShowChat } = useAppStore();
@@ -91,6 +95,7 @@ export default function ConversationList() {
   const [pinnedThreads, setPinnedThreads] = useState<Set<string>>(new Set());
   const [localPinnedThreads, setLocalPinnedThreads] = useState<Set<string>>(new Set());
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [failedAvatars, setFailedAvatars] = useState<Set<string>>(() => new Set());
   const [ctxMenu, setCtxMenu] = useState<{ contactId: string; zaloId: string; x: number; y: number } | null>(null);
   const [labelPickerId, setLabelPickerId] = useState<string | null>(null);
   const [muteSubmenuId, setMuteSubmenuId] = useState<string | null>(null);
@@ -848,6 +853,7 @@ export default function ConversationList() {
 
   // ── Helper: thực sự tìm kiếm SĐT với tài khoản đã xác định ──────────────────
   const doPhoneSearch = async (acc: import('@/store/accountStore').AccountInfo, phone: string) => {
+    if ((acc.channel || 'zalo') !== 'zalo') { setPhoneResult({ _notFound: true }); setPhoneSearching(false); return; }
     setPhoneSearching(true); setPhoneResult(null);
     try {
       const auth = { cookies: acc.cookies, imei: acc.imei, userAgent: acc.user_agent };
@@ -902,7 +908,7 @@ export default function ConversationList() {
   const loadLabelsIfStale = async () => {
     if (!activeAccountId) return;
     const acc = useAccountStore.getState().getActiveAccount();
-    if (!acc || (acc.channel || 'zalo') !== 'zalo') return; // Labels are Zalo-only
+    if (!acc || !channelSupports(acc.channel || 'zalo', 'supportsLabel')) return; // Labels are Zalo-only
     const now = Date.now();
     if (now - lastLabelsFetchRef.current < 3_600_000) return; // debounce 1 giờ
     lastLabelsFetchRef.current = now;
@@ -945,7 +951,19 @@ export default function ConversationList() {
     const res = await ipc.db?.getMessages({ zaloId, threadId: contactId, limit: 50, offset: 0 });
     const dbMessages = res?.messages || [];
     if (dbMessages.length > 0) {
-      setMessages(zaloId, contactId, [...dbMessages].reverse());
+      // Build lookup map for reply_to_id → original message content
+      const msgLookup = new Map<string, { content: string; type: string }>();
+      for (const m of dbMessages) {
+        msgLookup.set(m.msg_id, { content: m.content || '', type: m.msg_type || 'text' });
+      }
+      const mapped = dbMessages.map((m: any) => {
+        if (m.reply_to_id && !m.quote_data) {
+          const orig = msgLookup.get(m.reply_to_id);
+          return { ...m, quote_data: JSON.stringify({ msgId: m.reply_to_id, msg: orig?.content || '', senderId: '', msgType: orig?.type || 'text' }) };
+        }
+        return m;
+      });
+      setMessages(zaloId, contactId, [...mapped].reverse());
       // Sync is_replied dựa trên tin nhắn cuối thực tế
       syncRepliedState(zaloId, contactId, zaloId);
     } else {
@@ -1066,8 +1084,7 @@ export default function ConversationList() {
   const handleTogglePin = async (contactId: string, threadType: number) => {
     const acc = useAccountStore.getState().getActiveAccount(); if (!acc) return;
     const wasPinned = pinnedThreads.has(contactId);
-    if ((acc.channel || 'zalo') !== 'zalo') {
-      // FB: only local pin (Zalo pin API not available)
+    if (!channelSupports(acc.channel || 'zalo', 'supportsPinConversation')) {
       await handleToggleLocalPin(contactId);
       return;
     }
@@ -1098,8 +1115,7 @@ export default function ConversationList() {
     showNotification('Đã tắt thông báo', 'success');
     setMuteSubmenuId(null); setCtxMenu(null);
     const accObj = useAccountStore.getState().accounts.find(a => a.zalo_id === zId);
-    if (!accObj) return;
-    if ((accObj.channel || 'zalo') !== 'zalo') return; // FB: local-only mute, no Zalo API
+    if (!accObj || !channelSupports(accObj.channel || 'zalo', 'supportsMuteSync')) return;
     const auth = { cookies: accObj.cookies, imei: accObj.imei, userAgent: accObj.user_agent };
     const contact = (useChatStore.getState().contacts[zId] || []).find(c => c.contact_id === contactId);
     const threadType = contact?.contact_type === 'group' ? 1 : 0;
@@ -1149,7 +1165,7 @@ export default function ConversationList() {
     ipc.app?.setBadge(getFilteredUnreadCount());
     setCtxMenu(null);
     const accObj2 = useAccountStore.getState().accounts.find(a => a.zalo_id === zId);
-    if (!accObj2 || (accObj2.channel || 'zalo') !== 'zalo') return; // FB: no Zalo mute API
+    if (!accObj2 || !channelSupports(accObj2.channel || 'zalo', 'supportsMuteSync')) return;
     const auth2 = { cookies: accObj2.cookies, imei: accObj2.imei, userAgent: accObj2.user_agent };
     const contact = (useChatStore.getState().contacts[zId] || []).find(c => c.contact_id === contactId);
     const threadType = contact?.contact_type === 'group' ? 1 : 0;
@@ -1182,7 +1198,7 @@ export default function ConversationList() {
     const zId = overrideZaloId || activeAccountId;
     const accObj = useAccountStore.getState().accounts.find(a => a.zalo_id === zId);
     if (!accObj || !zId) return;
-    if ((accObj.channel || 'zalo') !== 'zalo') {
+    if (!channelSupports(accObj.channel || 'zalo', 'supportsLabel')) {
       showNotification('Nhãn Zalo không khả dụng cho kênh Facebook', 'warning');
       return;
     }
@@ -1303,7 +1319,7 @@ export default function ConversationList() {
     const threadType = contact.contact_type === 'group' ? 1 : 0;
     const isPinned = pinnedThreads.has(contact.contact_id);
     const isLocalPinned = localPinnedThreads.has(contact.contact_id);
-    const ctxIsFB = (contact.channel || 'zalo') === 'facebook';
+    const ctxChannelCap = getCapability((contact.channel || 'zalo') as Channel);
     const isMuted = isMutedFn(ctxZaloId, contact.contact_id);
     const hasUnread = contact.unread_count > 0;
     const ctxOthers: Set<string> = (allOthers[ctxZaloId] || new Set()) as Set<string>;
@@ -1334,7 +1350,7 @@ export default function ConversationList() {
           )}
         </div>
 
-        {!ctxIsFB && (
+        {ctxChannelCap.supportsPinConversation && (
           <CtxItem icon={isPinned ? '📍' : '📌'} label={isPinned ? 'Bỏ ghim (Zalo)' : 'Ghim (đồng bộ Zalo)'} onClick={() => handleTogglePin(contact.contact_id, threadType)} />
         )}
         <CtxItem icon={isLocalPinned ? '🔖' : '📎'} label={isLocalPinned ? 'Bỏ ghim trong app' : 'Ghim trong app'} onClick={() => handleToggleLocalPin(contact.contact_id)} />
@@ -1363,7 +1379,7 @@ export default function ConversationList() {
           </div>
         )}
 
-        {contact.contact_type !== 'group' && !ctxIsFB && (
+        {contact.contact_type !== 'group' && ctxChannelCap.supportsInviteToGroup && (
           <>
             <div className="border-t border-gray-700 my-1" />
             <CtxItem icon="👥" label="Mời vào nhóm" onClick={() => { setCtxMenu(null); setInviteContactId(contact.contact_id); }} />
@@ -1422,7 +1438,7 @@ export default function ConversationList() {
           >
             Đóng
           </button>
-        ) : (
+        ) : channelCap.supportsCreateGroup ? (
           <button title="Tạo nhóm" onClick={() => setCreateGroupOpen(true)}
             className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 flex-shrink-0">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1430,7 +1446,7 @@ export default function ConversationList() {
               <path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/>
             </svg>
           </button>
-        )}
+        ) : null}
       </div>
 
       {/* GlobalSearchPanel — fills remaining space below search bar when active */}
@@ -1548,17 +1564,19 @@ export default function ConversationList() {
               <div className="px-2 pt-1.5 pb-1 border-b border-gray-700/60">
                 <div className="flex bg-gray-700/60 rounded-md p-0.5 gap-0.5">
                   <button onClick={() => { setFilterLabelSource('local'); setFilterLabelIds([]); }}
-                    className={`flex-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${
-                      filterLabelSource === 'local' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'
+                    className={`${isFbLabel ? 'flex-1' : 'flex-1'} px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+                      filterLabelSource === 'local' || isFbLabel ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'
                     }`}>💾 Local</button>
-                  <button onClick={() => { setFilterLabelSource('zalo'); setFilterLabelIds([]); }}
-                    className={`flex-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${
-                      filterLabelSource === 'zalo' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'
-                    }`}>☁️ Zalo</button>
+                  {!isFbLabel && (
+                    <button onClick={() => { setFilterLabelSource('zalo'); setFilterLabelIds([]); }}
+                      className={`flex-1 px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+                        filterLabelSource === 'zalo' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'
+                      }`}>☁️ Zalo</button>
+                  )}
                 </div>
               </div>
 
-              {filterLabelSource === 'local' ? (
+              {(filterLabelSource === 'local' || isFbLabel) ? (
                 /* ── Local labels list (multi-select) ── */
                 <>
                   <button onClick={() => { setFilterLabelIds([]); setFilterDropdownOpen(false); }}
@@ -1869,9 +1887,27 @@ export default function ConversationList() {
                     name={contact.alias || contact.display_name}
                     size="md"
                   />
+                ) : contact.avatar_url && !failedAvatars.has(contact.contact_id) ? (
+                  <img src={toLocalMediaUrl(contact.avatar_url)} alt="" className="w-10 h-10 rounded-full object-cover"
+                    onError={() => {
+                      setFailedAvatars(prev => new Set(prev).add(contact.contact_id));
+                      // Auto-refresh avatar cho Facebook contacts (CDN hết hạn → 403)
+                      const ownerId = contact.owner_zalo_id || activeAccountId;
+                      if (ownerId && (contact.channel === 'facebook' || /^\d+$/.test(ownerId))) {
+                        ipc.fb.refreshContactAvatar({ accountId: ownerId, userId: contact.contact_id })
+                          .then(res => {
+                            if (res.success && res.avatarUrl) {
+                              updateContact(ownerId, {
+                                contact_id: contact.contact_id,
+                                avatar_url: res.avatarUrl,
+                              });
+                              setFailedAvatars(prev => { const next = new Set(prev); next.delete(contact.contact_id); return next; });
+                            }
+                          }).catch(() => {});
+                      }
+                    }} />
                 ) : (
-                  contact.avatar_url ? <img src={contact.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
-                    : <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold bg-blue-600">{(contact.alias || contact.display_name).charAt(0).toUpperCase()}</div>
+                  <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold bg-blue-600">{(contact.alias || contact.display_name).charAt(0).toUpperCase()}</div>
                 )}
                 {/* Badge tài khoản — chỉ hiện trong chế độ Gộp trang */}
                 {mergedInboxMode && ownerAcc && (

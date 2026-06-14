@@ -9,8 +9,10 @@ import PinnedBar, { buildPinFromMsg, usePinnedData, PinnedNote } from './PinnedM
 import ChatHistoryList from './ChatHistoryList';
 import SharedMessageContent from './SharedMessageContent';
 import * as channelIpc from '../../lib/channelIpc';
+import { getCapability, type Channel } from '@/../configs/channelConfig';
 import { ManagePanel } from './GroupInfoPanel';
 import                           { UserProfilePopup } from '../common/UserProfilePopup';
+import FBVideoThumb from './FBVideoThumb';
 import { RecalledBubble, BankCardBubble } from './MessageBubbles';
 import GroupAvatar from '../common/GroupAvatar';
 import ipc from '@/lib/ipc';
@@ -69,9 +71,17 @@ function convertZaloEmojis(text: string): string {
 }
 
 export default function ChatWindow() {
-  const { messages, activeThreadId, prependMessages, setMessages, contacts, setReplyTo, removeMessage, typingUsers, seenInfo } = useChatStore();
+  const { messages, activeThreadId, prependMessages, setMessages, contacts, setReplyTo, removeMessage, typingUsers, seenInfo, updateContact } = useChatStore();
   const { activeAccountId, getActiveAccount } = useAccountStore();
   const { showNotification, groupInfoCache, searchHighlightQuery } = useAppStore();
+
+  const activeContact = React.useMemo(() => {
+    if (!activeAccountId || !activeThreadId) return undefined;
+    return (contacts[activeAccountId] || []).find(c => c.contact_id === activeThreadId);
+  }, [activeAccountId, activeThreadId, contacts]);
+  const channelCap = React.useMemo(() =>
+    getCapability((activeContact?.channel || 'zalo') as Channel),
+  [activeContact]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -85,6 +95,10 @@ export default function ChatWindow() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  // Facebook API cursor pagination (tạm thời vô hiệu hóa do API lỗi 500)
+  const fbCursorRef = useRef<string | null>(null);
+  const fbHasMoreRef = useRef(false);
+  const fbProbeDoneRef = useRef(true);
   const [viewerState, setViewerState] = useState<{ images: MediaViewerImage[]; index: number } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; msg: any; isSent: boolean; isGroupAdmin?: boolean } | null>(null);
   const [forwardMsgs, setForwardMsgs] = useState<any[] | null>(null);
@@ -99,8 +113,14 @@ export default function ChatWindow() {
   const [loadingLatest, setLoadingLatest] = useState(false);
   const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
   const [userProfilePopup, setUserProfilePopup] = useState<{ userId: string; x: number; y: number } | null>(null);
+  // Track Facebook avatars that failed to load in message bubbles (per sender)
+  const [failedMsgAvatars, setFailedMsgAvatars] = useState<Set<string>>(new Set());
+  const avatarRefreshAttempted = useRef<Set<string>>(new Set());
   const [manageGroupOpen, setManageGroupOpen] = useState(false);
   const [noteModal, setNoteModal] = useState<{ topicId?: string; title?: string; creatorName?: string; createTime?: number } | null>(null);
+  // Drag-and-drop state (forward to MessageInput)
+  const dragCounterRef = useRef(0);
+  const [isDragging, setIsDragging] = useState(false);
   // Track which recalled messages the user has chosen to reveal original content
   const [revealedRecallIds, setRevealedRecallIds] = useState<Set<string>>(new Set());
 
@@ -193,6 +213,7 @@ export default function ChatWindow() {
   }, [groupInfoCache, activeAccountId, activeThreadId]);
 
   // ─── Group image messages với cùng groupLayoutId thành 1 bubble ───────────
+  // Cũng gom các ảnh Facebook từ cùng người gửi trong 30 giây vào 1 bubble
   const { groupedFirstMsgs, groupedSkipIds } = React.useMemo(() => {
     const byLayout: Record<string, any[]> = {};
     msgs.forEach((msg) => {
@@ -202,8 +223,46 @@ export default function ChatWindow() {
       if (!byLayout[key]) byLayout[key] = [];
       byLayout[key].push(msg);
     });
+
+    // ── Facebook: gom ảnh từ cùng người gửi trong 30 giây ────────────────
+    const FB_GROUP_WINDOW_MS = 30000;
+    let fbCurrentGroup: any[] = [];
+    const fbGroups: any[][] = [];
+
+    const commitFbGroup = () => {
+      if (fbCurrentGroup.length >= 2) fbGroups.push([...fbCurrentGroup]);
+      fbCurrentGroup = [];
+    };
+
+    for (const msg of msgs) {
+      // Bỏ qua nếu đã nằm trong group Zalo layout
+      const existingLayoutId = getGroupLayoutId(msg);
+      if (existingLayoutId) { commitFbGroup(); continue; }
+      // Chỉ gom media message Facebook
+      const isFbMedia = msg.channel === 'facebook' && isMediaType(msg.msg_type, msg.content);
+      if (!isFbMedia) { commitFbGroup(); continue; }
+
+      if (fbCurrentGroup.length === 0) {
+        fbCurrentGroup = [msg];
+      } else {
+        const last = fbCurrentGroup[fbCurrentGroup.length - 1];
+        const sameSender = msg.sender_id === last.sender_id;
+        const withinWindow = Math.abs(msg.timestamp - last.timestamp) <= FB_GROUP_WINDOW_MS;
+        if (sameSender && withinWindow) {
+          fbCurrentGroup.push(msg);
+        } else {
+          commitFbGroup();
+          fbCurrentGroup = [msg];
+        }
+      }
+    }
+    commitFbGroup();
+
+    // ── Build output: Zalo layout groups + Facebook time groups ──────────
     const groupedFirstMsgs: Record<string, any[]> = {};
     const groupedSkipIds = new Set<string>();
+
+    // Zalo layout groups (existing logic)
     for (const group of Object.values(byLayout)) {
       if (group.length < 2) continue;
       const sorted = [...group].sort((a, b) => {
@@ -218,6 +277,13 @@ export default function ChatWindow() {
       groupedFirstMsgs[sorted[0].msg_id] = sorted;
       for (let i = 1; i < sorted.length; i++) groupedSkipIds.add(sorted[i].msg_id);
     }
+
+    // Facebook time-based groups (messages đã có thứ tự sẵn)
+    for (const group of fbGroups) {
+      groupedFirstMsgs[group[0].msg_id] = group;
+      for (let i = 1; i < group.length; i++) groupedSkipIds.add(group[i].msg_id);
+    }
+
     return { groupedFirstMsgs, groupedSkipIds };
   }, [msgs]);
 
@@ -314,7 +380,7 @@ export default function ChatWindow() {
       const isRtf = isRtfMsg(mt, mc);
       const isPoll = mt === 'group.poll';
       const isVideo = isVideoType(mt);
-      const isVoice = mt === 'chat.voice';
+      const isVoice = mt === 'chat.voice' || mt === 'audio';
       const isGroupMedia = !isPoll && !isVideo && !isVoice && !!groupedFirstMsgs[msg.msg_id];
       const isMedia = !isCard && !isEcard && !isSticker && !isGroupMedia && !isRtf && !isPoll && !isVideo && !isVoice && isMediaType(mt, mc);
       const isFile = !isCard && !isEcard && !isSticker && !isMedia && !isRtf && !isPoll && !isVideo && !isVoice && isFileType(mt, mc);
@@ -349,6 +415,10 @@ export default function ChatWindow() {
     // Reset selection mode when switching threads
     setIsSelecting(false);
     setSelectedMsgIds(new Set());
+    // Reset Facebook API cursor khi đổi thread (tạm thời vô hiệu hóa)
+    fbCursorRef.current = null;
+    fbHasMoreRef.current = false;
+    fbProbeDoneRef.current = true;
   }, [activeThreadId]);
 
   // ─── Thread ready gate (đơn giản): set true ngay khi pinsReady = true ───────
@@ -600,6 +670,8 @@ export default function ChatWindow() {
         const isInitial = isInitialThreadLoadRef.current;
         isInitialThreadLoadRef.current = false;
         // Initial load: nếu < 50 tin thực thì không còn tin cũ hơn
+        // Riêng Facebook: không dùng heuristic này vì local có thể chưa có message nào
+        const isFb = activeContact?.channel === 'facebook';
         if (isInitial) {
           const realCount = msgs.filter(m => !m.msg_id.startsWith('temp_')).length;
           if (realCount < 50) setHasMore(false);
@@ -655,6 +727,7 @@ export default function ChatWindow() {
     shouldRestoreScrollRef.current = true;
 
     try {
+      // Step 1: Try local DB first (existing behavior)
       const res = await ipc.db?.getMessages({
         zaloId: activeAccountId,
         threadId: activeThreadId,
@@ -662,13 +735,31 @@ export default function ChatWindow() {
         before,
       });
       if (res?.messages?.length > 0) {
-        prependMessages(activeAccountId, activeThreadId, [...res.messages].reverse());
-        // Nếu trả về ít hơn limit thì không còn nữa
+        // Build a lookup map of msg_id → content+type for all loaded messages
+        // (used to populate reply quote_data with actual original message content)
+        const msgLookup = new Map<string, { content: string; type: string }>();
+        for (const m of res.messages) {
+          msgLookup.set(m.msg_id, { content: m.content || '', type: m.msg_type || 'text' });
+        }
+        // Convert reply_to_id → quote_data for Facebook messages so reply previews render
+        const mapped = res.messages.map((m: any) => {
+          if (m.reply_to_id && !m.quote_data) {
+            const orig = msgLookup.get(m.reply_to_id);
+            const origContent = orig?.content || '';
+            const origType = orig?.type || 'text';
+            return { ...m, quote_data: JSON.stringify({ msgId: m.reply_to_id, msg: origContent, senderId: '', msgType: origType }) };
+          }
+          return m;
+        });
+        prependMessages(activeAccountId, activeThreadId, [...mapped].reverse());
         if (res.messages.length < 30) setHasMore(false);
-      } else {
-        setHasMore(false);
-        shouldRestoreScrollRef.current = false;
+        return;
       }
+
+      // Step 2: (Temporarily disabled) Facebook API fallback - fetchThreadMessages đang lỗi 500
+      // Step 3: Không có thêm tin nhắn
+      setHasMore(false);
+      shouldRestoreScrollRef.current = false;
     } catch {
       shouldRestoreScrollRef.current = false;
       setLoadError(true);
@@ -676,6 +767,13 @@ export default function ChatWindow() {
       setLoadingMore(false);
     }
   };
+
+  /** Probe Facebook API sau initial load để xác định có tin cũ hơn không (TẠM THỜI VÔ HIỆU HÓA do API lỗi 500) */
+  const probeFbOlderMessages = React.useCallback(async (_accountId: string, _threadId: string) => {
+    // API đang lỗi 500 → bỏ qua, không còn tin cũ hơn
+    setHasMore(false);
+    fbHasMoreRef.current = false;
+  }, []);
 
   const handleUndo = async (msg: any) => {
     const auth = getAuth();
@@ -750,22 +848,26 @@ export default function ChatWindow() {
   };
 
   const handleReact = async (msg: any, emoji: string) => {
-    const auth = getAuth();
-    if (!auth) return;
     try {
       const contactList = contacts[activeAccountId || ''] || [];
       const contact = contactList.find(c => c.contact_id === msg.thread_id);
       const ch = msg.channel || contact?.channel || 'zalo';
 
+      // Optimistic update: show reaction immediately in UI
+      const accId = activeAccountId || '';
+      useChatStore.getState().updateMessageReaction(accId, msg.thread_id, msg.msg_id, accId, emoji);
+
       if (ch === 'facebook') {
         await channelIpc.addReaction('facebook', {
-          accountId: activeAccountId || '',
+          accountId: accId,
           messageId: msg.msg_id,
           emoji,
           threadId: msg.thread_id,
           action: 'add',
         });
       } else {
+        const auth = getAuth();
+        if (!auth) return;
         const reactionKey = EMOJI_TO_REACTION[emoji] || 'HEART';
         const messagePayload = JSON.stringify({
           data: { msgId: msg.msg_id, cliMsgId: msg.cli_msg_id || msg.msg_id },
@@ -774,27 +876,32 @@ export default function ChatWindow() {
         });
         await ipc.zalo?.addReaction({ auth, reactionType: reactionKey, message: messagePayload });
       }
+
     } catch {}
   };
 
   // Huỷ reaction: gửi Reactions.NONE = "" để xoá
   const handleCancelReaction = async (msg: any) => {
-    const auth = getAuth();
-    if (!auth) return;
     try {
       const contactList = contacts[activeAccountId || ''] || [];
       const contact = contactList.find(c => c.contact_id === msg.thread_id);
       const ch = msg.channel || contact?.channel || 'zalo';
 
+      // Optimistic update: remove reaction immediately in UI
+      const accId = activeAccountId || '';
+      useChatStore.getState().updateMessageReaction(accId, msg.thread_id, msg.msg_id, accId, '');
+
       if (ch === 'facebook') {
         await channelIpc.addReaction('facebook', {
-          accountId: activeAccountId || '',
+          accountId: accId,
           messageId: msg.msg_id,
           emoji: '',
           threadId: msg.thread_id,
           action: 'remove',
         });
       } else {
+        const auth = getAuth();
+        if (!auth) return;
         const messagePayload = JSON.stringify({
           data: { msgId: msg.msg_id, cliMsgId: msg.cli_msg_id || msg.msg_id },
           threadId: msg.thread_id,
@@ -896,8 +1003,19 @@ export default function ChatWindow() {
       const aroundMsgs = aroundRes?.messages;
       if (!aroundMsgs?.length) return;
 
+      // Build reply lookup map for reply_to_id → quote_data
+      const msgLookup2 = new Map<string, { content: string; type: string }>();
+      for (const m of aroundMsgs) msgLookup2.set(m.msg_id, { content: m.content || '', type: m.msg_type || 'text' });
+      const mappedAround = aroundMsgs.map((m: any) => {
+        if (m.reply_to_id && !m.quote_data) {
+          const orig = msgLookup2.get(m.reply_to_id);
+          return { ...m, quote_data: JSON.stringify({ msgId: m.reply_to_id, msg: orig?.content || '', senderId: '', msgType: orig?.type || 'text' }) };
+        }
+        return m;
+      });
+
       // Replace current messages with the "around" set
-      setMessages(activeAccountId, activeThreadId, aroundMsgs);
+      setMessages(activeAccountId, activeThreadId, mappedAround);
       setHasMore(true); // Có thể còn tin cũ hơn phía trên
       setIsViewingHistory(true); // Đánh dấu đang xem tin cũ → hiện nút "Về tin mới nhất"
 
@@ -929,7 +1047,17 @@ export default function ChatWindow() {
         offset: 0,
       });
       if (res?.messages?.length) {
-        const sorted = [...res.messages].reverse();
+        // Build reply lookup map for reply_to_id → quote_data
+        const msgLookup3 = new Map<string, { content: string; type: string }>();
+        for (const m of res.messages) msgLookup3.set(m.msg_id, { content: m.content || '', type: m.msg_type || 'text' });
+        const mappedLatest = res.messages.map((m: any) => {
+          if (m.reply_to_id && !m.quote_data) {
+            const orig = msgLookup3.get(m.reply_to_id);
+            return { ...m, quote_data: JSON.stringify({ msgId: m.reply_to_id, msg: orig?.content || '', senderId: '', msgType: orig?.type || 'text' }) };
+          }
+          return m;
+        });
+        const sorted = [...mappedLatest].reverse();
         setMessages(activeAccountId, activeThreadId, sorted);
         setHasMore(res.messages.length >= 50);
       }
@@ -1081,6 +1209,48 @@ export default function ChatWindow() {
     }
   }, [activeAccountId, activeThreadId, buildImagesFromCurrentThread, buildImageEntry, dedupeViewerImages, findViewerIndex]);
 
+  // ── Drag-and-drop handlers (forward to MessageInput) ────────────────
+  // MUST be placed BEFORE early returns to maintain React hooks order
+  const handleDragEnter = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current += 1;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragging(true);
+    }
+  }, []);
+
+  const handleDragLeave = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDragging(false);
+    }
+  }, []);
+
+  const handleDragOver = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = React.useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    dragCounterRef.current = 0;
+
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length === 0) return;
+    if (!activeThreadId) return;
+
+    // Dispatch custom event cho MessageInput xử lý
+    window.dispatchEvent(new CustomEvent('chat:dragDropFiles', {
+      detail: { files },
+    }));
+  }, [activeThreadId]);
+
   if (!activeThreadId) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-gray-500">
@@ -1093,7 +1263,34 @@ export default function ChatWindow() {
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden relative">
+    <div
+      className="flex-1 flex flex-col overflow-hidden relative"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {/* Drag overlay */}
+      {isDragging && (
+        <div
+          className="absolute inset-0 z-40 flex items-center justify-center bg-gray-900/70 backdrop-blur-sm border-2 border-dashed border-blue-500 pointer-events-none"
+          onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onDrop={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        >
+          <div className="flex flex-col items-center gap-2 text-center px-4">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="1.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p className="text-blue-400 font-medium text-sm">Thả file / ảnh để gửi</p>
+            <p className="text-gray-500 text-xs">Hỗ trợ ảnh, video, file</p>
+          </div>
+        </div>
+      )}
+
       {/* ── Loading skeleton — hiển thị khi data chưa sẵn sàng ── */}
       {!threadReady && (
         <div className="flex-1 flex flex-col p-4 space-y-3 animate-pulse">
@@ -1345,7 +1542,7 @@ export default function ChatWindow() {
                     {m.avatar ? (
                       <img src={m.avatar} alt={name} className="w-4 h-4 rounded-full object-cover inline-block flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display='none'; }} />
                     ) : (
-                      <span className="w-4 h-4 rounded-full bg-purple-600 inline-flex items-center justify-center text-white flex-shrink-0" style={{fontSize:'8px'}}>
+                      <span className="w-4 h-4 rounded-full bg-purple-600 inline-flex items-center justify-center text-white flex-shrink-0" style={{fontSize:'0.5rem'}}>
                         {(name || '?').charAt(0).toUpperCase()}
                       </span>
                     )}
@@ -1376,7 +1573,7 @@ export default function ChatWindow() {
           // Contact/display info — needed for recalled bubble too
           const contact = !isSent ? getContact(msg.sender_id) : null;
           const groupMember = (!isSent && !contact) ? getGroupMember(msg.sender_id) : null;
-          const avatarUrl = contact?.avatar_url || groupMember?.avatar || '';
+          const avatarUrl = toLocalMediaUrl(contact?.avatar_url || groupMember?.avatar || '');
           const displayName = contact?.alias || contact?.display_name || groupMember?.displayName || msg.sender_id;
 
           const isRecalled = msg.is_recalled === 1 || msg.status === 'recalled' || msg.msg_type === 'recalled';
@@ -1410,8 +1607,22 @@ export default function ChatWindow() {
                             setUserProfilePopup({ userId: msg.sender_id, x: e.clientX, y: e.clientY });
                           }}
                         >
-                          {avatarUrl ? (
-                            <img src={avatarUrl} alt={displayName} className="w-7 h-7 rounded-full object-cover" />
+                          {avatarUrl && !failedMsgAvatars.has(msg.sender_id) ? (
+                            <img src={avatarUrl} alt={displayName} className="w-7 h-7 rounded-full object-cover"
+                              onError={() => {
+                                setFailedMsgAvatars(prev => new Set(prev).add(msg.sender_id));
+                                const contact = getContact(msg.sender_id);
+                                if (activeAccountId && (contact?.channel === 'facebook' || /^\d+$/.test(msg.sender_id)) && !avatarRefreshAttempted.current.has(msg.sender_id)) {
+                                  avatarRefreshAttempted.current.add(msg.sender_id);
+                                  ipc.fb.refreshContactAvatar({ accountId: activeAccountId, userId: msg.sender_id })
+                                    .then(res => {
+                                      if (res.success && res.avatarUrl) {
+                                        updateContact(activeAccountId, { contact_id: msg.sender_id, avatar_url: res.avatarUrl });
+                                        setFailedMsgAvatars(prev => { const n = new Set(prev); n.delete(msg.sender_id); return n; });
+                                      }
+                                    }).catch(() => {});
+                                }
+                              }} />
                           ) : (
                             <div className="w-7 h-7 rounded-full bg-gray-600 flex items-center justify-center text-white text-xs font-bold">{(displayName || 'U').charAt(0).toUpperCase()}</div>
                           )}
@@ -1439,7 +1650,7 @@ export default function ChatWindow() {
           const isRtf = cached?.isRtf ?? isRtfMsg(msg.msg_type, msg.content);
           const isPollMsg = cached?.isPoll ?? (msg.msg_type === 'group.poll');
           const isVideoMsg = cached?.isVideo ?? isVideoType(msg.msg_type);
-          const isVoiceMsg = cached?.isVoice ?? (msg.msg_type === 'chat.voice');
+          const isVoiceMsg = cached?.isVoice ?? (msg.msg_type === 'chat.voice' || msg.msg_type === 'audio');
           const isBankCardMsg = isBankCardType(msg.msg_type, msg.content);
           const isGroupMedia = cached?.isGroupMedia ?? (!isPollMsg && !isVideoMsg && !isVoiceMsg && !!groupedFirstMsgs[msg.msg_id]);
           const groupMediaMsgs = isGroupMedia ? groupedFirstMsgs[msg.msg_id] : null;
@@ -1529,8 +1740,22 @@ export default function ChatWindow() {
                             setUserProfilePopup({ userId: msg.sender_id, x: e.clientX, y: e.clientY });
                           }}
                         >
-                          {avatarUrl ? (
-                            <img src={avatarUrl} alt={displayName} className="w-7 h-7 rounded-full object-cover" />
+                          {avatarUrl && !failedMsgAvatars.has(msg.sender_id) ? (
+                            <img src={avatarUrl} alt={displayName} className="w-7 h-7 rounded-full object-cover"
+                              onError={() => {
+                                setFailedMsgAvatars(prev => new Set(prev).add(msg.sender_id));
+                                const contact = getContact(msg.sender_id);
+                                if (activeAccountId && (contact?.channel === 'facebook' || /^\d+$/.test(msg.sender_id)) && !avatarRefreshAttempted.current.has(msg.sender_id)) {
+                                  avatarRefreshAttempted.current.add(msg.sender_id);
+                                  ipc.fb.refreshContactAvatar({ accountId: activeAccountId, userId: msg.sender_id })
+                                    .then(res => {
+                                      if (res.success && res.avatarUrl) {
+                                        updateContact(activeAccountId, { contact_id: msg.sender_id, avatar_url: res.avatarUrl });
+                                        setFailedMsgAvatars(prev => { const n = new Set(prev); n.delete(msg.sender_id); return n; });
+                                      }
+                                    }).catch(() => {});
+                                }
+                              }} />
                           ) : (
                             <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold">
                               {(displayName || 'U').charAt(0).toUpperCase()}
@@ -1574,12 +1799,25 @@ export default function ChatWindow() {
                         ? 'px-3 py-2 bg-blue-600 text-white rounded-br-sm'
                         : 'px-3 py-2 bg-gray-700 text-gray-200 rounded-bl-sm'
                     }`}>
-                    {/* Quote preview */}
-                    {msg.quote_data && (() => {
-                      try {
-                        const q = JSON.parse(msg.quote_data);
+                    {/* Quote preview — supports both pre-built quote_data and reply_to_id fallback */}
+                    {(msg.quote_data || msg.reply_to_id) && (() => {
+                      // Build quote object from quote_data or fallback to reply_to_id + msgs lookup
+                      let q: any;
+                      if (msg.quote_data) {
+                        try { q = JSON.parse(msg.quote_data); } catch { q = {}; }
+                      } else {
+                        // Fallback: look up original message from msgs by reply_to_id
+                        const origFromMsgs = msgs.find(m => m.msg_id === msg.reply_to_id);
+                        q = {
+                          msgId: msg.reply_to_id,
+                          msg: origFromMsgs?.content || '',
+                          senderId: '',
+                          msgType: origFromMsgs?.msg_type || 'text',
+                        };
+                      }
 
-                        //  Ưu tiên imageUrl đã lưu, sau đó extract từ msg/attach
+                      try {
+                      //  Ưu tiên imageUrl đã lưu, sau đó extract từ msg/attach
                         const quotedImgUrl = q.imageUrl || extractQuoteImage(q.msg, q.attach, q.msgType);
                         // Nếu vẫn không có URL, tìm trong danh sách tin nhắn theo msgId
                         let lookupImgUrl = '';
@@ -1645,7 +1883,7 @@ export default function ChatWindow() {
                             }
                           }
                         }
-                        
+
                         return (
                           <div
                             className={`border-l-2 ${isSent ? 'border-blue-300 bg-blue-500/20' : 'border-gray-400 bg-gray-600/50'} rounded pl-2 pr-1 py-1 mb-1 text-xs opacity-90 cursor-pointer hover:opacity-100 overflow-hidden min-w-0 max-w-full`}
@@ -1703,7 +1941,22 @@ export default function ChatWindow() {
                       renderPoll={() => (
                         <PollBubble msg={msg} isSent={isSent} activeAccountId={activeAccountId || ''} threadId={activeThreadId || ''} />
                       )}
-                      renderVideo={() => <VideoBubble msg={msg} isSent={isSent} />}
+                      renderVideo={() => {
+                        // Facebook E2EE video: auto-capture thumbnail + click → system player
+                        let videoPath = '';
+                        try {
+                          const lp = typeof msg.local_paths === 'string'
+                            ? JSON.parse(msg.local_paths || '{}') : (msg.local_paths || {});
+                          videoPath = lp.file || lp.video || lp.main || '';
+                        } catch {}
+                        if (!videoPath && msg.channel === 'facebook') {
+                          try {
+                            const atts = JSON.parse(msg.attachments || '[]');
+                            if (atts[0]?.localPath) videoPath = atts[0].localPath;
+                          } catch {}
+                        }
+                        return <FBVideoThumb videoPath={videoPath} />;
+                      }}
                       renderVoice={() => <VoiceBubble msg={msg} isSent={isSent} />}
                       renderFile={() => <FileBubble msg={msg} isSent={isSent} />}
                       renderMedia={() => (
@@ -1744,7 +1997,7 @@ export default function ChatWindow() {
 
 
                   {/* Single reaction button — position absolute at bottom corner (side matching bubble alignment) */}
-                  {!isEcardMsg && !isGroupedStickerFirst && (() => {
+                  {channelCap.supportsReaction && !isEcardMsg && !isGroupedStickerFirst && (() => {
                     const rFull = parseReactionsFull(msg.reactions);
                     const myEmoji = activeAccountId
                       ? (Object.entries(rFull.emoji || {}).find(([, d]) => (d as any).users?.[activeAccountId] > 0)?.[0] || null)
@@ -1856,18 +2109,20 @@ export default function ChatWindow() {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
               Sao chép
             </button>
-            <button onClick={() => {
-              const selectedMsgs = msgs.filter(m => selectedMsgIds.has(m.msg_id));
-              if (selectedMsgs.length > 0) {
-                setForwardMsgs(selectedMsgs);
-                setIsSelecting(false);
-                setSelectedMsgIds(new Set());
-              }
-            }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs transition-colors">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 014-4h12"/></svg>
-              Chuyển tiếp
-            </button>
+            {channelCap.supportsForward && (
+              <button onClick={() => {
+                const selectedMsgs = msgs.filter(m => selectedMsgIds.has(m.msg_id));
+                if (selectedMsgs.length > 0) {
+                  setForwardMsgs(selectedMsgs);
+                  setIsSelecting(false);
+                  setSelectedMsgIds(new Set());
+                }
+              }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs transition-colors">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 014-4h12"/></svg>
+                Chuyển tiếp
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1911,7 +2166,7 @@ export default function ChatWindow() {
             {firstAvatar ? (
               <img src={firstAvatar} className="w-4 h-4 rounded-full object-cover flex-shrink-0 opacity-80" alt="" />
             ) : (
-              <div className="w-4 h-4 rounded-full bg-gray-600 flex items-center justify-center text-white flex-shrink-0 opacity-80" style={{ fontSize: '9px' }}>
+              <div className="w-4 h-4 rounded-full bg-gray-600 flex items-center justify-center text-white flex-shrink-0 opacity-80" style={{ fontSize: '0.5625rem' }}>
                 {firstInitial}
               </div>
             )}
@@ -1961,14 +2216,14 @@ export default function ChatWindow() {
                   {u.avatar ? (
                     <img src={u.avatar} alt={u.name} className="w-full h-full object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                   ) : (
-                    <div className="w-full h-full bg-blue-500 flex items-center justify-center text-white" style={{ fontSize: '7px', fontWeight: 700 }}>
+                    <div className="w-full h-full bg-blue-500 flex items-center justify-center text-white" style={{ fontSize: '0.4375rem', fontWeight: 700 }}>
                       {(u.name).charAt(0).toUpperCase()}
                     </div>
                   )}
                 </div>
               ))}
               {extra > 0 && (
-                <div className="w-4 h-4 rounded-full ring-1 ring-gray-800 bg-gray-600 flex items-center justify-center text-white" style={{ fontSize: '7px' }}>
+                <div className="w-4 h-4 rounded-full ring-1 ring-gray-800 bg-gray-600 flex items-center justify-center text-white" style={{ fontSize: '0.4375rem' }}>
                   +{extra}
                 </div>
               )}
@@ -1994,6 +2249,7 @@ export default function ChatWindow() {
           msg={contextMenu.msg}
           isSent={contextMenu.isSent}
           isGroupAdmin={contextMenu.isGroupAdmin}
+          channelCap={channelCap}
           onClose={() => setContextMenu(null)}
           onReply={(m) => setReplyTo(m)}
           onForward={(m) => { setForwardMsgs([m]); }}
@@ -2008,7 +2264,7 @@ export default function ChatWindow() {
       )}
 
       {/* Forward message modal */}
-      {forwardMsgs && (
+      {channelCap.supportsForward && forwardMsgs && (
         <ForwardMessageModal
           messages={forwardMsgs}
           contacts={contactList}
@@ -2017,6 +2273,10 @@ export default function ChatWindow() {
             const auth = getAuth();
             if (!auth) return;
             setForwardMsgs(null);
+            // Detect channel from forwarded message
+            const forwardContact = contacts[activeAccountId || '']?.find((c: any) =>
+              messages[0] ? c.contact_id === messages[0].thread_id : false);
+            const forwardChannel = messages[0]?.channel || forwardContact?.channel || 'zalo';
             // Chạy lần lượt ở background, không block UI
             (async () => {
               const total = messages.length * targets.length;
@@ -2026,7 +2286,7 @@ export default function ChatWindow() {
                 for (const target of targets) {
                   counter++;
                   try {
-                    await sendOneForward(auth, msg, target, composeText);
+                    await sendOneForward(auth, msg, target, composeText, forwardChannel, activeAccountId);
                   } catch (e: any) {
                     failCount++;
                   }
@@ -2046,7 +2306,7 @@ export default function ChatWindow() {
       )}
 
       {/* Reaction context menu (right-click on reaction pill) */}
-      {reactionContextMenu && (
+      {channelCap.supportsReaction && reactionContextMenu && (
         <ReactionContextMenu
           x={reactionContextMenu.x}
           y={reactionContextMenu.y}
@@ -2059,7 +2319,7 @@ export default function ChatWindow() {
       )}
 
       {/* Reaction popup: xem ai thả cảm xúc */}
-      {reactionPopup && (
+      {channelCap.supportsReaction && reactionPopup && (
         <ReactionPopup
           msg={reactionPopup.msg}
           initialEmoji={reactionPopup.activeEmoji}
@@ -2263,8 +2523,8 @@ function PollBubble({ msg, isSent, activeAccountId, threadId }: { msg: any; isSe
 
 
 /** CreatePollDialog — tạo cuộc bình chọn mới trong nhóm */
-export function CreatePollDialog({ groupId, activeAccountId, onClose }: {
-  groupId: string; activeAccountId: string; onClose: () => void;
+export function CreatePollDialog({ groupId, activeAccountId, channel, onClose }: {
+  groupId: string; activeAccountId: string; channel?: string; onClose: () => void;
 }) {
   const [question, setQuestion] = React.useState('');
   const [options, setOptions] = React.useState(['', '']);
@@ -2287,23 +2547,33 @@ export function CreatePollDialog({ groupId, activeAccountId, onClose }: {
     if (opts.length < 2) { showNotification('Cần ít nhất 2 lựa chọn', 'error'); return; }
     setCreating(true);
     try {
-      const accRes = await ipc.login?.getAccounts();
-      const acc = accRes?.accounts?.find((a: any) => a.zalo_id === activeAccountId) || accRes?.accounts?.[0];
-      if (!acc) throw new Error('No account');
-      const expMs = expiredTime ? new Date(expiredTime).getTime() : 0;
-      const res = await ipc.zalo?.createPoll({
-        auth: { cookies: acc.cookies, imei: acc.imei, userAgent: acc.user_agent },
-        options: {
+      let res;
+      if (channel === 'facebook') {
+        res = await channelIpc.createPoll('facebook', {
+          accountId: activeAccountId,
+          threadId: groupId,
           question: q,
           options: opts,
-          expiredTime: expMs,
-          allowMultiChoices: allowMulti,
-          allowAddNewOption: allowAdd,
-          hideVotePreview: hidePreview,
-          isAnonymous: isAnon,
-        },
-        groupId,
-      });
+        });
+      } else {
+        const accRes = await ipc.login?.getAccounts();
+        const acc = accRes?.accounts?.find((a: any) => a.zalo_id === activeAccountId) || accRes?.accounts?.[0];
+        if (!acc) throw new Error('No account');
+        const expMs = expiredTime ? new Date(expiredTime).getTime() : 0;
+        res = await ipc.zalo?.createPoll({
+          auth: { cookies: acc.cookies, imei: acc.imei, userAgent: acc.user_agent },
+          options: {
+            question: q,
+            options: opts,
+            expiredTime: expMs,
+            allowMultiChoices: allowMulti,
+            allowAddNewOption: allowAdd,
+            hideVotePreview: hidePreview,
+            isAnonymous: isAnon,
+          },
+          groupId,
+        });
+      }
       if (res?.success) {
         showNotification('Đã tạo bình chọn', 'success');
         onClose();
@@ -2598,7 +2868,7 @@ function parseQuoteMsg(msg: string, msgType?: string): string {
     if (msgType === 'chat.webcontent') return '🏦 [Tài khoản ngân hàng]';
     return '';
   }
-  
+
   // Nếu có msgType từ DB → sử dụng để xác định loại trước
   if (msgType) {
     // Với các loại đặc biệt, kiểm tra msgType trước khi parse msg
@@ -2647,25 +2917,25 @@ function parseQuoteMsg(msg: string, msgType?: string): string {
       return msgType === 'share.link' ? '[Link]' : '[File]';
     }
   }
-  
+
   // Thử parse JSON để lấy text hoặc phân tích cấu trúc
   try {
     const parsed = JSON.parse(msg);
-    
+
     // Nếu parse ra string thuần túy → đây là text message
     if (typeof parsed === 'string') return parsed;
-    
+
     if (parsed && typeof parsed === 'object') {
       // Parse params nếu có
       let paramsObj = parsed.params;
       if (typeof paramsObj === 'string') {
         try { paramsObj = JSON.parse(paramsObj); } catch { paramsObj = null; }
       }
-      
+
       // 1. Kiểm tra text message trước (msg/content field)
       if (parsed.msg && typeof parsed.msg === 'string') return String(parsed.msg);
       if (parsed.content && typeof parsed.content === 'string') return String(parsed.content);
-      
+
       // 2. Kiểm tra LINK với action="recommened.link"
       if (parsed.action === 'recommened.link' || parsed.action === 'recommended.link') {
         // Ưu tiên title gốc (có thể chứa text người dùng), fallback sang mediaTitle
@@ -2675,7 +2945,7 @@ function parseQuoteMsg(msg: string, msgType?: string): string {
         }
         return '🔗 [Link]';
       }
-      
+
       // 3. Kiểm tra FILE/LINK thông thường: có title + href
       if (parsed.title && parsed.href) {
         // Có params.fileSize/fileExt → file
@@ -2691,7 +2961,7 @@ function parseQuoteMsg(msg: string, msgType?: string): string {
         }
         // Có image params → rơi vào case ảnh bên dưới
       }
-      
+
       // 4. Kiểm tra HÌNH ẢNH: có params.hd/rawUrl hoặc thumb
       const hasImageData = !!(paramsObj?.hd || paramsObj?.rawUrl || parsed.thumb || (parsed.href && !parsed.title));
       if (hasImageData) {
@@ -2734,7 +3004,7 @@ function isFileType(msgType: string, content: string): boolean {
 
 /** Kiểm tra tin nhắn là sticker */
 function isStickerType(msgType: string): boolean {
-  return msgType === 'chat.sticker';
+  return msgType === 'chat.sticker' || msgType === 'sticker';
 }
 
 /** Kiểm tra tin nhắn webchat với action=rtf (tin nhắn có định dạng rich text) */
@@ -2773,7 +3043,7 @@ function isMediaType(msgType: string, content: string): boolean {
 
 /** Kiểm tra tin nhắn video */
 function isVideoType(msgType: string): boolean {
-  return msgType === 'chat.video.msg';
+  return msgType === 'chat.video.msg' || msgType === 'video';
 }
 
 /** Kiểm tra tin nhắn thẻ ngân hàng (chat.webcontent + zinstant.bankcard) */
@@ -3245,7 +3515,7 @@ function VideoBubble({ msg, isSent }: { msg: any; isSent: boolean }) {
   return (
     <div
       className="relative group/video cursor-pointer rounded-xl overflow-hidden bg-black ring-1 ring-black/[0.12]"
-      style={{ width: 280, height: displayHeight || 160 }}
+      style={{ width: '17.5rem', height: displayHeight || 160 }}
       onClick={handlePlay}
     >
       {/* Thumbnail */}
@@ -3449,7 +3719,7 @@ function VoiceBubble({ msg, isSent }: { msg: any; isSent: boolean }) {
                 <div
                   key={i}
                   className={`rounded-full transition-colors duration-100 ${filled ? 'bg-white' : 'bg-white/30'}`}
-                  style={{ width: 2, height: h * 1.5, minHeight: 3 }}
+                  style={{ width: '0.125rem', height: h * 1.5, minHeight: '0.1875rem' }}
                 />
               );
             })}
@@ -3631,6 +3901,16 @@ function SingleImageInGroup({ msg, onView, isSelecting: isSelectingProp, isSelec
     if (localFilePath) localUrl = toLocalMediaUrl(localFilePath);
   } catch {}
 
+  // FB: use localPath from attachments for immediate preview
+  let fbLocalUrls: string[] = [];
+  if (msg.channel === 'facebook') {
+    try {
+      const atts = JSON.parse(msg.attachments || '[]');
+      fbLocalUrls = atts.map((a: any) => a.localPath ? toLocalMediaUrl(a.localPath) : (a.url || '')).filter(Boolean);
+      if (!localUrl && fbLocalUrls.length > 0) localUrl = fbLocalUrls[0];
+    } catch {}
+  }
+
   let remoteUrl = '';
   try {
     const parsed = JSON.parse(msg.content || '{}');
@@ -3639,6 +3919,13 @@ function SingleImageInGroup({ msg, onView, isSelecting: isSelectingProp, isSelec
       remoteUrl = params.hd || params.rawUrl || parsed.href || parsed.thumb || '';
     }
   } catch {}
+  // FB fallback: lấy URL từ attachments
+  if (!remoteUrl && msg.channel === 'facebook') {
+    try {
+      const attachments = JSON.parse(msg.attachments || '[]');
+      remoteUrl = attachments[0]?.url || attachments[0]?.href || attachments[0]?.thumb || '';
+    } catch {}
+  }
 
   // Remote-first: CDN hiển thị ngay; chuyển local khi file đã tải xong
   const displayUrl = useLocal ? (localUrl || remoteUrl) : (remoteUrl || localUrl);
@@ -3736,13 +4023,48 @@ function StickerBubble({ msg }: { msg: any }) {
 
   React.useEffect(() => {
     let cancelled = false;
+
+    // ── Facebook sticker ────────────────────────────────────────────────
+    if (msg.channel === 'facebook') {
+      // Check local file trước (đã được download từ main process)
+      try {
+        const lp: Record<string, string> = typeof msg.local_paths === 'string'
+          ? JSON.parse(msg.local_paths || '{}') : (msg.local_paths || {});
+        const localFile = lp.main || (Object.values(lp)[0] as string) || '';
+        if (localFile) {
+          const localUrl = toLocalMediaUrl(localFile);
+          if (localUrl) {
+            // Reset failed trước đó (set ở lần effect chạy đầu khi chưa có local_paths)
+            setFailed(false);
+            setStickerUrl(localUrl);
+            return;
+          }
+        }
+      } catch {}
+
+      // E2EE sticker không có directPath → unsupported (bridge không cung cấp)
+      try {
+        const atts = JSON.parse(msg.attachments || '[]');
+        const hasDirectPath = atts[0]?.directPath;
+        if (!hasDirectPath && !atts[0]?.url) {
+          if (!cancelled) setUnsupported(true);
+          return;
+        }
+      } catch {}
+
+      // Có directPath nhưng chưa có local file → đang download, giữ loading
+      if (!cancelled && !stickerUrl) setFailed(true);
+      return;
+    }
+
+    // ── Zalo sticker ────────────────────────────────────────────────────
     const load = async () => {
       let stickerId: number | null = null;
       try {
         const parsed = JSON.parse(msg.content || '{}');
         stickerId = parsed?.id ?? parsed?.sticker_id ?? null;
       } catch {}
-      if (!stickerId) { setFailed(true); return; }
+      if (!stickerId) { if (!cancelled) setFailed(true); return; }
 
       // 1. Check DB cache first (includes unsupported flag)
       try {
@@ -3764,11 +4086,10 @@ function StickerBubble({ msg }: { msg: any }) {
         const accountsRes = await ipc.login?.getAccounts();
         const accounts: any[] = accountsRes?.accounts || [];
         const active = accounts.find((a: any) => a.is_active) || accounts[0];
-        if (!active) { setFailed(true); return; }
+        if (!active) { if (!cancelled) setFailed(true); return; }
         const auth = { cookies: active.cookies, imei: active.imei, userAgent: active.user_agent };
         const detailRes = await ipc.zalo?.getStickersDetail({ auth, stickerIds: [stickerId] });
         if (!detailRes?.success) {
-          // API call failed (e.g. disconnected) — mark unsupported
           ipc.db?.markStickerUnsupported({ stickerId }).catch(() => {});
           if (!cancelled) setUnsupported(true);
           return;
@@ -3776,10 +4097,8 @@ function StickerBubble({ msg }: { msg: any }) {
         const stickers: any[] = detailRes?.response || [];
         if (stickers.length && stickers[0]?.stickerUrl) {
           if (!cancelled) setStickerUrl(stickers[0].stickerUrl);
-          // Cache to DB
           ipc.db?.saveStickers({ stickers }).catch(() => {});
         } else {
-          // Empty result — mark unsupported
           ipc.db?.markStickerUnsupported({ stickerId }).catch(() => {});
           if (!cancelled) setUnsupported(true);
         }
@@ -3790,7 +4109,7 @@ function StickerBubble({ msg }: { msg: any }) {
     };
     load();
     return () => { cancelled = true; };
-  }, [msg.content]);
+  }, [msg.content, msg.local_paths, msg.attachments]);
 
   if (unsupported) {
     return (
@@ -4289,7 +4608,7 @@ function LinkBubble({ parsed, isSent }: { parsed: any; isSent: boolean }) {
             {urlLine}
           </p>
         )}
-        
+
         {/* Description */}
         {shortDesc && (
           <p className="text-xs text-gray-400 leading-relaxed line-clamp-2">
@@ -4591,7 +4910,7 @@ function applyRtfStyles(text: string, styles: RtfStyle[], mentions?: RtfMention[
     i = j;
   }
 
-  return <span className="whitespace-pre-wrap select-text">{nodes}</span>;
+  return <span className="whitespace-pre-wrap select-text break-all">{nodes}</span>;
 }
 
 /** Render normal text, highlighting @mentions in blue, with optional click-to-profile */
@@ -4692,8 +5011,8 @@ function TextWithMentions({
     }
   }
 
-  if (segments.length === 0) return <span className="whitespace-pre-wrap select-text">{converted}</span>;
-  return <span className="whitespace-pre-wrap select-text">{segments}</span>;
+  if (segments.length === 0) return <span className="whitespace-pre-wrap select-text break-all">{converted}</span>;
+  return <span className="whitespace-pre-wrap select-text break-all">{segments}</span>;
 }
 
 function RtfBubble({
@@ -4761,6 +5080,7 @@ function extractMsgText(msg: any): string {
 /** Gửi 1 tin nhắn đến 1 target — dùng trong forward loop */
 async function sendOneForward(
   auth: any, msg: any, target: { threadId: string; threadType: number }, composeText: string,
+  channel?: string, accountId?: string,
 ) {
   const msgType = msg.msg_type || '';
   const content = msg.content || '';
@@ -4775,6 +5095,22 @@ async function sendOneForward(
     }
   } catch {}
 
+  if (channel === 'facebook' && accountId) {
+    if ((isFile || isVideo) && localPath) {
+      await channelIpc.sendAttachment('facebook', { accountId, threadId: target.threadId, filePath: localPath, threadType: target.threadType });
+    } else if (isImage && localPath) {
+      await channelIpc.sendAttachment('facebook', { accountId, threadId: target.threadId, filePath: localPath, threadType: target.threadType });
+    } else {
+      const text = composeText || extractMsgText(msg);
+      await channelIpc.sendMessage('facebook', { accountId, threadId: target.threadId, body: text, threadType: target.threadType });
+    }
+    if (composeText && (isFile || isVideo || isImage) && localPath) {
+      await channelIpc.sendMessage('facebook', { accountId, threadId: target.threadId, body: composeText, threadType: target.threadType });
+    }
+    return;
+  }
+
+  // Zalo path (existing)
   if ((isFile || isVideo) && localPath) {
     await ipc.zalo?.sendFile({ auth, filePath: localPath, threadId: target.threadId, type: target.threadType });
   } else if (isImage && localPath) {
@@ -5081,7 +5417,8 @@ function ForwardMessageModal({ messages, contacts, onClose, onForward }: {
                     size="md"
                   />
                 ) : c.avatar_url ? (
-                  <img src={c.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
+                  <img src={c.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover flex-shrink-0"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                 ) : (
                   <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0 bg-blue-600">
                     {(c.display_name || 'U').charAt(0).toUpperCase()}
@@ -5672,7 +6009,8 @@ function FriendRequestBar({ zaloId, userId, contact, getAuth, onReady }: {
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700">
               <div className="flex items-center gap-3">
                 {contact?.avatar_url ? (
-                  <img src={contact.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
+                  <img src={contact.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                 ) : (
                   <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold">
                     {(displayName || 'U').charAt(0).toUpperCase()}

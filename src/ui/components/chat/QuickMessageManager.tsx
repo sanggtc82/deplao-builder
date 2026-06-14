@@ -5,6 +5,7 @@ import { useAppStore } from '@/store/appStore';
 import { callApi, extractApiError } from '@/utils/apiError';
 import { showConfirm } from '../common/ConfirmDialog';
 import { toLocalMediaUrl } from '@/lib/localMedia';
+import { getCapability, type Channel } from '@/../configs/channelConfig';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export type LocalMediaFile = {
@@ -416,8 +417,9 @@ export function QuickMessageManagerPanel({ onClose, onSelect }: { onClose: () =>
   const { activeAccountId, getActiveAccount } = useAccountStore();
   const { showNotification } = useAppStore();
 
-  const isFacebookChannel = getActiveAccount()?.channel === 'facebook';
-  const [mode, setMode] = useState<QuickMessageMode>(() => isFacebookChannel ? 'local' : getStoredMode(activeAccountId || ''));
+  const activeAccount = getActiveAccount();
+  const channelCap = getCapability((activeAccount?.channel || 'zalo') as Channel);
+  const [mode, setMode] = useState<QuickMessageMode>(() => channelCap.supportsQuickMessages ? getStoredMode(activeAccountId || '') : 'local');
   const [items, setItems] = useState<QuickMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -605,7 +607,7 @@ export function QuickMessageManagerPanel({ onClose, onSelect }: { onClose: () =>
           <span className="text-sm font-semibold text-white">Tin nhắn nhanh</span>
           <div className="flex items-center gap-2">
             {/* Mode toggle — hide Zalo tab for Facebook channel */}
-            {!isFacebookChannel && (
+            {channelCap.supportsQuickMessages && (
             <div className="flex items-center gap-0.5 p-0.5 bg-gray-700 rounded-lg">
               <button
                 onClick={() => switchMode('local')}
@@ -638,7 +640,7 @@ export function QuickMessageManagerPanel({ onClose, onSelect }: { onClose: () =>
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700/60 flex-shrink-0 bg-gray-800/80">
           <div className="flex items-center gap-2">
             {/* Sync button — only on Zalo tab, not for Facebook channel */}
-            {mode === 'zalo' && !isFacebookChannel && (
+            {mode === 'zalo' && channelCap.supportsQuickMessages && (
               <SyncDropdown onSync={handleSync} syncing={syncing} anchorRef={syncBtnRef} />
             )}
             <button onClick={() => load(true)} disabled={loading} title="Làm mới"
@@ -672,7 +674,7 @@ export function QuickMessageManagerPanel({ onClose, onSelect }: { onClose: () =>
                 <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
               </svg>
               Chưa có tin nhắn nhanh nào.
-              {mode === 'local' && !isFacebookChannel && (
+              {mode === 'local' && channelCap.supportsQuickMessages && (
                 <span className="text-gray-600">
                   Chuyển sang tab <strong className="text-gray-400">Zalo</strong> và nhấn <strong className="text-gray-400">Đồng bộ</strong> để import
                 </span>
@@ -748,7 +750,7 @@ export function QuickMessageManagerPanel({ onClose, onSelect }: { onClose: () =>
 
         {/* Mode hint footer */}
         <div className={`px-4 py-2.5 border-t border-gray-700/60 flex-shrink-0 text-xs ${mode === 'local' ? 'text-green-400/70' : 'text-yellow-400/70'}`}>
-          {isFacebookChannel
+          {!channelCap.supportsQuickMessages
             ? '✓ Local — tin nhắn nhanh cho kênh Facebook'
             : mode === 'local'
             ? '✓ Local — không bị Zalo chặn số lượng tin nhắn nhanh'
@@ -794,7 +796,7 @@ export function QuickMessageDropdown({
 
   return (
     <div className="bg-gray-800 border border-gray-600 rounded-2xl shadow-2xl overflow-hidden"
-      style={{ maxHeight: '320px', display: 'flex', flexDirection: 'column' }}>
+      style={{ maxHeight: '20rem', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
         <span className="text-xs font-semibold text-white">Tin nhắn nhanh ({filtered.length})</span>

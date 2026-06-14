@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { showConfirm } from '../common/ConfirmDialog';
 import { FacebookIcon, ZaloIcon } from '../common/ChannelBadge';
 import type { Channel } from '../../../configs/channelConfig';
-import { isUnsupportedWorkflowNodeType } from './workflowConfig';
+import { getChannelColor } from '../../../configs/channelConfig';
 
 interface PageAccount {
   zalo_id: string;
@@ -21,10 +21,6 @@ interface Props {
 }
 
 const normalizeWorkflowChannel = (channel?: string): Channel => channel === 'facebook' ? 'facebook' : 'zalo';
-
-const workflowHasUnsupportedNodes = (workflow: any): boolean => {
-  return Array.isArray(workflow?.nodes) && workflow.nodes.some((node: any) => typeof node?.type === 'string' && isUnsupportedWorkflowNodeType(node.type));
-};
 
 function CreateWorkflowChannelModal({
   onClose,
@@ -60,33 +56,24 @@ function CreateWorkflowChannelModal({
               </div>
               <div className="text-center">
                 <p className="text-white font-semibold text-sm">Zalo</p>
-                <p className="text-gray-400 text-xs mt-0.5">Tạo workflow chạy được ngay</p>
+                <p className="text-gray-400 text-xs mt-0.5">Tạo workflow cho Zalo</p>
               </div>
             </button>
 
             <button
-              type="button"
-              disabled
-              className="relative flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-2 border-gray-700 bg-gray-800/30 opacity-70 cursor-not-allowed"
+              onClick={() => onSelect('facebook')}
+              className="flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-2 border-gray-600 hover:border-blue-500 hover:bg-blue-500/10 bg-gray-800/60 transition-all group"
             >
-              <span className="absolute top-3 right-3 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                Tạm khóa
-              </span>
-              <div className="w-14 h-14 rounded-full bg-[#1877F2]/20 flex items-center justify-center">
+              <div className="w-14 h-14 rounded-full bg-[#1877F2]/20 flex items-center justify-center group-hover:bg-[#1877F2]/30 transition-colors">
                 <FacebookIcon size={32} />
               </div>
               <div className="text-center">
                 <p className="text-white font-semibold text-sm">Facebook</p>
-                <p className="text-gray-400 text-xs mt-0.5">Chưa hỗ trợ chạy workflow</p>
+                <p className="text-gray-400 text-xs mt-0.5">Tạo workflow cho Facebook</p>
               </div>
             </button>
           </div>
 
-          <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3">
-            <p className="text-amber-600 text-xs leading-relaxed">
-              Facebook đã có mặt ở hệ thống tài khoản, nhưng workflow hiện chỉ hỗ trợ kênh <strong>Zalo</strong>. Các trigger/action Facebook đang được ẩn tạm thời cho đến khi runtime hoàn thiện.
-            </p>
-          </div>
         </div>
       </div>
     </div>
@@ -620,6 +607,81 @@ function TestRunModal({ accounts, workflowPageIds, triggerType, onRun, onClose }
   );
 }
 
+// ── Channel filter dropdown ─────────────────────────────────────────────────────
+function ChannelFilterButton({ value, onChange }: {
+  value: 'all' | Channel;
+  onChange: (v: 'all' | Channel) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const options: { key: 'all' | Channel; label: string }[] = [
+    { key: 'all', label: 'Tất cả kênh' },
+    { key: 'zalo', label: 'Zalo' },
+    { key: 'facebook', label: 'Facebook' },
+  ];
+
+  const selectedLabel = options.find(o => o.key === value)?.label || 'Tất cả kênh';
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors border ${
+          value !== 'all'
+            ? 'bg-blue-600/20 border-blue-500/50 text-blue-300 hover:bg-blue-600/30'
+            : 'bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-600 hover:text-white'
+        }`}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/>
+        </svg>
+        <span className="max-w-[120px] truncate">{selectedLabel}</span>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+          className={`flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}>
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1.5 w-[180px] bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-50 overflow-hidden">
+          {options.map(opt => (
+            <button
+              key={opt.key}
+              onClick={() => { onChange(opt.key); setOpen(false); }}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-gray-800/70 ${
+                value === opt.key ? 'bg-gray-800/40 text-white' : 'text-gray-400'
+              }`}
+            >
+              {opt.key === 'zalo' && <span className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />}
+              {opt.key === 'facebook' && <span className="w-2 h-2 rounded-full bg-[#1877F2] flex-shrink-0" />}
+              {opt.key === 'all' && (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                </svg>
+              )}
+              <span className="text-xs font-medium">{opt.label}</span>
+              {value === opt.key && (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="ml-auto text-blue-400">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function WorkflowList({ onEdit, onOpenStore }: Props) {
   const { showNotification } = useAppStore();
@@ -630,6 +692,7 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
   const [cloneAllSource, setCloneAllSource] = useState<string | null>(null);
   const [filterPages, setFilterPages] = useState<string[]>([]);  // empty = all
   const [searchQuery, setSearchQuery] = useState('');
+  const [channelFilter, setChannelFilter] = useState<'all' | Channel>('all');
   const [runningId, setRunningId] = useState<string | null>(null);
   const [testRunWf, setTestRunWf] = useState<any | null>(null);
   const [showCreateChannelModal, setShowCreateChannelModal] = useState(false);
@@ -649,7 +712,6 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
     load();
     ipc.login?.getAccounts().then((res: any) => {
       if (res?.success) setAccounts((res.accounts || [])
-        .filter((a: any) => (a.channel || 'zalo') === 'zalo')
         .map((a: any) => ({
         zalo_id: a.zalo_id,
         full_name: a.full_name || '',
@@ -661,10 +723,6 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
   }, []);
 
   const createNew = async (channel: Channel) => {
-    if (channel !== 'zalo') {
-      showNotification('Workflow Facebook hiện chưa hỗ trợ tạo mới.', 'warning');
-      return;
-    }
     const id = uuidv4();
     const res = await ipc.workflow?.save({
       channel,
@@ -704,10 +762,6 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
   };
 
   const handleRunClick = (wf: any) => {
-    if (normalizeWorkflowChannel(wf.channel) !== 'zalo' || workflowHasUnsupportedNodes(wf)) {
-      showNotification('Workflow Facebook hiện chưa hỗ trợ chạy.', 'warning');
-      return;
-    }
     const triggerNode = (wf.nodes || []).find((n: any) => (n.type || '').startsWith('trigger.'));
     const triggerType = triggerNode?.type || '';
     const hasSendNodes = (wf.nodes || []).some((n: any) => {
@@ -768,10 +822,8 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
           showNotification('File không phải workflow Deplao hợp lệ', 'error');
           return;
         }
-        if (normalizeWorkflowChannel(data.channel) !== 'zalo' || (data.nodes || []).some((n: any) => typeof n?.type === 'string' && isUnsupportedWorkflowNodeType(n.type))) {
-          showNotification('Workflow Facebook hiện chưa hỗ trợ nhập vào hệ thống.', 'warning');
-          return;
-        }
+        // File cũ không có channel → mặc định Zalo
+        const importChannel = data.channel === 'facebook' ? 'facebook' : 'zalo';
         // Create new IDs for all nodes/edges
         const idMap: Record<string, string> = {};
         const importedNodes = (data.nodes || []).map((n: any) => {
@@ -788,7 +840,7 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
 
         const newId = uuidv4();
         const res = await ipc.workflow?.save({
-          channel: 'zalo',
+          channel: importChannel,
           id: newId,
           name: data.name ? `${data.name} (nhập)` : 'Workflow nhập',
           description: data.description || '',
@@ -812,9 +864,13 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
     e.target.value = '';
   };
 
-  /** Filter by selected pages (empty = show all) and search query */
+  /** Filter by selected pages, channel, and search query */
   const filteredWorkflows = (() => {
     let result = workflows;
+    // Filter by channel
+    if (channelFilter !== 'all') {
+      result = result.filter(wf => normalizeWorkflowChannel(wf.channel) === channelFilter);
+    }
     // Filter by pages
     if (filterPages.length > 0) {
       result = result.filter(wf => {
@@ -882,14 +938,14 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
 
   const renderChannelBadge = (wf: any) => {
     const channel = normalizeWorkflowChannel(wf.channel);
-    const unsupported = channel !== 'zalo' || workflowHasUnsupportedNodes(wf);
+    const isZalo = channel === 'zalo';
     return (
       <span className={`inline-flex items-center text-[11px] px-2 py-0.5 rounded-full border ${
-        unsupported
-          ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-          : 'bg-blue-500/10 border-blue-500/30 text-blue-300'
+        isZalo
+          ? 'bg-blue-500/10 border-blue-500/30 text-blue-300'
+          : 'bg-[#1877F2]/10 border-[#1877F2]/30 text-[#1877F2]'
       }`}>
-        {unsupported ? 'Facebook · tạm khóa' : 'Zalo'}
+        {isZalo ? 'Zalo' : 'Facebook'}
       </span>
     );
   };
@@ -921,12 +977,6 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
                   Clone tất cả
                 </button>
             )}
-
-            {/* Multi-select page filter — only when accounts exist */}
-            {accounts.length > 0 && (
-              <PageFilterButton accounts={accounts} filterPages={filterPages} onChange={setFilterPages} />
-            )}
-
 
             {onOpenStore && (
               <button
@@ -962,7 +1012,7 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
           </div>
         </div>
 
-        {/* Search bar & stats */}
+        {/* Search bar & filters & stats */}
         {workflows.length > 0 && (
           <div className="flex items-center gap-3">
             <div className="relative flex-1 max-w-md">
@@ -985,6 +1035,15 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
                 </button>
               )}
             </div>
+
+            {/* Multi-select page filter — only when accounts exist */}
+            {accounts.length > 0 && (
+              <PageFilterButton accounts={accounts} filterPages={filterPages} onChange={setFilterPages} />
+            )}
+
+            {/* Channel filter */}
+            <ChannelFilterButton value={channelFilter} onChange={setChannelFilter} />
+
             <div className="flex items-center gap-3 text-xs text-gray-500">
               <span className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-green-500" />
@@ -1055,8 +1114,6 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filteredWorkflows.map(wf => {
             const isRunning = runningId === wf.id;
-            const isUnsupported = normalizeWorkflowChannel(wf.channel) !== 'zalo' || workflowHasUnsupportedNodes(wf);
-            const toggleBlocked = isUnsupported && !wf.enabled;
             return (
               <div key={wf.id}
                 className="group bg-gray-900 border border-gray-700/80 rounded-2xl hover:border-gray-600 transition-all hover:shadow-lg hover:shadow-black/20 flex flex-col overflow-hidden">
@@ -1083,10 +1140,7 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
                       <button
                         onClick={(e) => { e.stopPropagation(); handleToggle(wf.id, !wf.enabled); }}
                         className="flex-shrink-0"
-                        title={isUnsupported
-                          ? (wf.enabled ? 'Workflow Facebook đang bị khóa — bạn vẫn có thể tắt nó' : 'Workflow Facebook hiện chưa hỗ trợ chạy')
-                          : (wf.enabled ? 'Đang bật — nhấn để tắt' : 'Đang tắt — nhấn để bật')}
-                        disabled={toggleBlocked}
+                        title={wf.enabled ? 'Đang bật — nhấn để tắt' : 'Đang tắt — nhấn để bật'}
                       >
                         <div className={`w-9 h-[20px] rounded-full transition-colors relative ${wf.enabled ? 'bg-blue-600' : 'bg-gray-700'}`}>
                           <span className={`absolute top-[3px] w-[14px] h-[14px] bg-white rounded-full shadow transition-all ${wf.enabled ? 'left-[19px]' : 'left-[3px]'}`} />
@@ -1107,9 +1161,6 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
                   <span className="text-[11px] text-gray-600">{(wf.nodes || []).length} nodes</span>
                   <span className="text-gray-800">·</span>
                   {renderPageBadges(wf)}
-                  {isUnsupported && (
-                    <span className="text-[11px] text-amber-300">Chỉ xem tạm — chưa chạy được</span>
-                  )}
                 </div>
 
                 {/* Card footer */}
@@ -1119,7 +1170,7 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
                   </span>
 
                   <div className="flex items-center gap-1">
-                    <button onClick={() => handleRunClick(wf)} disabled={isRunning || isUnsupported} title={isUnsupported ? 'Workflow Facebook hiện chưa hỗ trợ chạy' : 'Chạy thử'}
+                    <button onClick={() => handleRunClick(wf)} disabled={isRunning} title="Chạy thử"
                       className="h-7 px-2.5 rounded-lg flex items-center justify-center gap-1.5 text-xs font-medium text-gray-400 hover:text-green-400 hover:bg-green-500/10 disabled:opacity-40 transition-colors">
                       {isRunning
                         ? <span className="w-3 h-3 border-2 border-green-500/30 border-t-green-500 rounded-full animate-spin" />
@@ -1133,8 +1184,7 @@ export default function WorkflowList({ onEdit, onOpenStore }: Props) {
                         <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
                       </svg>
                     </button>
-                    <button onClick={() => setCloningWf(wf)} title={isUnsupported ? 'Workflow Facebook hiện chưa hỗ trợ nhân bản' : 'Nhân bản'}
-                      disabled={isUnsupported}
+                    <button onClick={() => setCloningWf(wf)} title="Nhân bản"
                       className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-amber-400 hover:bg-amber-500/10 transition-colors">
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>

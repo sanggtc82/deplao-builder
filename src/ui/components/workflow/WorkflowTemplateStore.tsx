@@ -32,6 +32,7 @@ interface PageAccount {
   full_name: string;
   avatar_url: string;
   phone?: string;
+  channel?: string;
 }
 
 interface Props {
@@ -67,6 +68,14 @@ function TemplateCard({
 
   return (
     <div className="bg-gray-900 border border-gray-700/80 rounded-2xl p-5 hover:border-gray-600 transition-all group relative flex flex-col">
+      {/* Channel badge */}
+      {(tpl.channel === 'facebook') && (
+        <div className="absolute top-3 right-3 flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-[#1877F2]/10 border border-[#1877F2]/30 text-[#1877F2] font-medium">
+          <span className="w-1 h-1 rounded-full bg-[#1877F2]" />
+          Facebook
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-start gap-3 mb-3">
         <div className="w-11 h-11 rounded-xl bg-gray-800 border border-gray-700 flex items-center justify-center text-xl flex-shrink-0">
@@ -322,6 +331,11 @@ function InstallModal({
   onDone: (workflowId: string) => void;
 }) {
   const { showNotification } = useAppStore();
+  const channel = tpl.channel || 'zalo';
+  const channelLabel = channel === 'zalo' ? 'Zalo' : 'Facebook';
+  const filteredAccounts = channel === 'zalo'
+    ? accounts.filter(a => (a as any).channel === 'zalo' || !(a as any).channel)
+    : accounts.filter(a => (a as any).channel === 'facebook');
   const [selectedPages, setSelectedPages] = useState<string[]>([]);
   const [wfName, setWfName] = useState(tpl.name);
   const [installing, setInstalling] = useState(false);
@@ -337,7 +351,7 @@ function InstallModal({
       const { nodes, edges } = instantiateTemplate(tpl);
       const workflowId = uuidv4();
       const res = await ipc.workflow?.save({
-        channel: 'zalo',
+        channel,
         id: workflowId,
         name: wfName,
         description: tpl.description,
@@ -400,15 +414,15 @@ function InstallModal({
           {/* Page selection */}
           <div>
             <label className="text-gray-400 text-[11px] font-medium uppercase tracking-wider block mb-1.5">
-              Áp dụng cho tài khoản Zalo
+              Áp dụng cho tài khoản {channelLabel}
             </label>
-            {accounts.length === 0 ? (
+            {filteredAccounts.length === 0 ? (
               <div className="bg-gray-800/60 border border-gray-700 rounded-xl px-4 py-3 text-center">
-                <p className="text-gray-500 text-xs">Chưa có tài khoản Zalo nào. Workflow sẽ chạy cho tất cả tài khoản Zalo.</p>
+                <p className="text-gray-500 text-xs">Chưa có tài khoản {channelLabel} nào. Workflow sẽ chạy cho tất cả tài khoản {channelLabel}.</p>
               </div>
             ) : (
               <div className="space-y-1.5 max-h-[160px] overflow-y-auto">
-                {accounts.map(acc => {
+                {filteredAccounts.map(acc => {
                   const selected = selectedPages.includes(acc.zalo_id);
                   return (
                     <label key={acc.zalo_id}
@@ -433,8 +447,8 @@ function InstallModal({
             )}
             <p className="text-gray-600 text-[10px] mt-1.5">
               {selectedPages.length === 0
-                ? '⚠ Chưa chọn — workflow sẽ chạy cho TẤT CẢ tài khoản Zalo'
-                : `✓ Sẽ áp dụng cho ${selectedPages.length} tài khoản Zalo`}
+                ? `⚠ Chưa chọn — workflow sẽ chạy cho TẤT CẢ tài khoản ${channelLabel}`
+                : `✓ Sẽ áp dụng cho ${selectedPages.length} tài khoản ${channelLabel}`}
             </p>
           </div>
 
@@ -475,6 +489,7 @@ function InstallModal({
 export default function WorkflowTemplateStore({ onBack, onEdit }: Props) {
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState<TemplateCategory | 'all'>('all');
+  const [channelFilter, setChannelFilter] = useState<'all' | 'zalo' | 'facebook'>('all');
   const [previewTpl, setPreviewTpl] = useState<WorkflowTemplate | null>(null);
   const [installTpl, setInstallTpl] = useState<WorkflowTemplate | null>(null);
   const [accounts, setAccounts] = useState<PageAccount[]>([]);
@@ -482,12 +497,12 @@ export default function WorkflowTemplateStore({ onBack, onEdit }: Props) {
   useEffect(() => {
     ipc.login?.getAccounts().then((res: any) => {
       if (res?.success) setAccounts((res.accounts || [])
-        .filter((a: any) => (a.channel || 'zalo') === 'zalo')
         .map((a: any) => ({
         zalo_id: a.zalo_id,
         full_name: a.full_name || '',
         avatar_url: a.avatar_url || '',
         phone: a.phone || '',
+        channel: a.channel || 'zalo',
       })));
     }).catch(() => {});
   }, []);
@@ -497,6 +512,10 @@ export default function WorkflowTemplateStore({ onBack, onEdit }: Props) {
 
     if (activeCategory !== 'all') {
       list = list.filter(t => t.category === activeCategory);
+    }
+
+    if (channelFilter !== 'all') {
+      list = list.filter(t => (t.channel || 'zalo') === channelFilter);
     }
 
     if (search.trim()) {
@@ -509,7 +528,15 @@ export default function WorkflowTemplateStore({ onBack, onEdit }: Props) {
     }
 
     return list;
-  }, [search, activeCategory]);
+  }, [search, activeCategory, channelFilter]);
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const cat of TEMPLATE_CATEGORIES) {
+      counts[cat.key] = ALL_TEMPLATES.filter(t => t.category === cat.key).length;
+    }
+    return counts;
+  }, []);
 
   const handleInstallDone = (workflowId: string) => {
     setInstallTpl(null);
@@ -580,7 +607,7 @@ export default function WorkflowTemplateStore({ onBack, onEdit }: Props) {
                   : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300'
               }`}
             >
-              Tất cả
+              Tất cả <span className="text-gray-500 ml-1">({ALL_TEMPLATES.length})</span>
             </button>
             {TEMPLATE_CATEGORIES.map(cat => (
               <button
@@ -592,10 +619,46 @@ export default function WorkflowTemplateStore({ onBack, onEdit }: Props) {
                     : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300'
                 }`}
               >
-                {cat.icon} {cat.label}
+                {cat.icon} {cat.label} <span className="text-gray-500">({categoryCounts[cat.key] || 0})</span>
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Channel filter */}
+        <div className="flex items-center gap-1.5 flex-wrap mt-3">
+          <button
+            onClick={() => setChannelFilter('all')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+              channelFilter === 'all'
+                ? 'bg-blue-600/20 border-blue-500/50 text-blue-300'
+                : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300'
+            }`}
+          >
+            Tất cả kênh
+          </button>
+          <button
+            onClick={() => setChannelFilter('zalo')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+              channelFilter === 'zalo'
+                ? 'bg-blue-600/20 border-blue-500/50 text-blue-300'
+                : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300'
+            }`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block mr-1" />
+            Zalo
+          </button>
+          <button
+            onClick={() => setChannelFilter('facebook')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+              channelFilter === 'facebook'
+                ? 'bg-blue-600/20 border-blue-500/50 text-blue-300'
+                : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300'
+            }`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-[#1877F2] inline-block mr-1" />
+            Facebook
+          </button>
         </div>
       </div>
 
@@ -617,25 +680,6 @@ export default function WorkflowTemplateStore({ onBack, onEdit }: Props) {
           </div>
         ) : (
           <>
-            {/* Category summary when showing all */}
-            {activeCategory === 'all' && !search && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-                {TEMPLATE_CATEGORIES.map(cat => {
-                  const count = ALL_TEMPLATES.filter(t => t.category === cat.key).length;
-                  return (
-                    <button
-                      key={cat.key}
-                      onClick={() => setActiveCategory(cat.key)}
-                      className="bg-gray-900 border border-gray-700/80 rounded-xl p-3 hover:border-gray-600 transition-colors text-left group"
-                    >
-                      <div className="text-2xl mb-1">{cat.icon}</div>
-                      <p className="text-white text-xs font-medium group-hover:text-blue-300 transition-colors">{cat.label}</p>
-                      <p className="text-gray-600 text-[10px]">{count} mẫu</p>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
 
             {/* Template grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

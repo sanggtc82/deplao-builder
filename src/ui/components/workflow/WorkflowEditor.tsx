@@ -12,7 +12,7 @@ import NodePalette from './NodePalette';
 import NodeConfigPanel from './NodeConfigPanel';
 import RunHistoryPanel from './RunHistoryPanel';
 import WorkflowAIDialog from './WorkflowAIDialog';
-import { DEFAULT_CONFIGS, nodeTypeGroup, getNodeLabel, isUnsupportedWorkflowNodeType } from './workflowConfig';
+import { DEFAULT_CONFIGS, nodeTypeGroup, getNodeLabel } from './workflowConfig';
 import ipc from '../../lib/ipc';
 import { useAppStore } from '@/store/appStore';
 import type { Channel } from '../../../configs/channelConfig';
@@ -30,10 +30,6 @@ interface Props {
 }
 
 const normalizeWorkflowChannel = (channel?: string): Channel => channel === 'facebook' ? 'facebook' : 'zalo';
-
-const hasUnsupportedWorkflowNodes = (nodes: any[]): boolean => {
-  return nodes.some((node: any) => typeof node?.data?.type === 'string' && isUnsupportedWorkflowNodeType(node.data.type));
-};
 
 // ── Test-run recipient picker modal ──────────────────────────────────────────
 function TestRunModal({ accounts, workflowPageIds, triggerType, onRun, onClose }: {
@@ -253,7 +249,7 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
   });
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
-  const [accounts, setAccounts] = useState<{ zalo_id: string; full_name: string; avatar_url: string; phone?: string }[]>([]);
+  const [accounts, setAccounts] = useState<{ zalo_id: string; full_name: string; avatar_url: string; phone?: string; channel?: string }[]>([]);
   const [showPagePicker, setShowPagePicker] = useState(false);
   const [showTestRunModal, setShowTestRunModal] = useState(false);
   const [showAIDialog, setShowAIDialog] = useState(false);
@@ -263,7 +259,7 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
   // Load connected accounts for page selector
   useEffect(() => {
     ipc.login?.getAccounts().then((res: any) => {
-      if (res?.success) setAccounts((res.accounts || []).filter((acc: any) => (acc.channel || 'zalo') === 'zalo'));
+      if (res?.success) setAccounts(res.accounts || []);
     }).catch(() => {});
   }, []);
 
@@ -348,10 +344,6 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
   });
 
   const handleSave = async () => {
-    if (workflowMeta.channel !== 'zalo' || hasUnsupportedWorkflowNodes(nodes)) {
-      showNotification('Workflow Facebook hiện chưa hỗ trợ lưu/chạy trong editor.', 'warning');
-      return;
-    }
     setSaving(true);
     try {
       const res = await ipc.workflow?.save(buildWorkflow());
@@ -363,10 +355,6 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
   };
 
   const handleRun = async (triggerData?: any) => {
-    if (workflowMeta.channel !== 'zalo' || hasUnsupportedWorkflowNodes(nodes)) {
-      showNotification('Workflow Facebook hiện chưa hỗ trợ chạy.', 'warning');
-      return;
-    }
     setRunning(true);
     try {
       // Save first, then run
@@ -445,10 +433,10 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
           showNotification('File không phải workflow Deplao hợp lệ', 'error');
           return;
         }
-        if (normalizeWorkflowChannel(data.channel) !== 'zalo' || (data.nodes || []).some((n: any) => typeof n?.type === 'string' && isUnsupportedWorkflowNodeType(n.type))) {
-          showNotification('Workflow Facebook hiện chưa hỗ trợ nhập vào editor.', 'warning');
-          return;
-        }
+        // File cũ không có channel → mặc định Zalo
+        const importChannel = data.channel === 'facebook' ? 'facebook' : 'zalo';
+
+        // Assign new IDs to avoid conflicts
         // Assign new IDs to avoid conflicts
         const idMap: Record<string, string> = {};
         const originalNodes = data.nodes || [];
@@ -488,7 +476,7 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
         })));
         setWorkflowMeta(m => ({
           ...m,
-          channel: 'zalo',
+          channel: importChannel,
           name: data.name || m.name,
           description: data.description || m.description,
         }));
@@ -503,14 +491,20 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
     e.target.value = '';
   };
 
+  const channelLabel = workflowMeta.channel === 'zalo' ? 'Zalo' : 'Facebook';
+
+  // Filter accounts by workflow channel — only show matching accounts
+  const filteredAccounts = accounts.filter(a => {
+    const accChannel = a.channel || 'zalo';
+    return accChannel === workflowMeta.channel;
+  });
+
   // Page selector label
   const pageLabel = workflowMeta.pageIds.length === 0
-    ? <span className="text-amber-400">⚠ Tất cả tài khoản Zalo</span>
+    ? <span className="text-amber-400">⚠ Tất cả tài khoản {channelLabel} ({filteredAccounts.length})</span>
     : workflowMeta.pageIds.length === 1
       ? <span className="text-blue-300">📱 {accounts.find(a => a.zalo_id === workflowMeta.pageIds[0])?.full_name || workflowMeta.pageIds[0]}</span>
-      : <span className="text-blue-300">📱 {workflowMeta.pageIds.length} tài khoản Zalo</span>;
-
-  const workflowUnsupported = workflowMeta.channel !== 'zalo' || hasUnsupportedWorkflowNodes(nodes);
+      : <span className="text-blue-300">📱 {workflowMeta.pageIds.length} tài khoản</span>;
 
   const togglePage = (zaloId: string) => {
     setWorkflowMeta(m => ({
@@ -540,11 +534,11 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
         />
 
         <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs ${
-          workflowUnsupported
-            ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-            : 'bg-blue-500/10 border-blue-500/30 text-blue-300'
+          workflowMeta.channel === 'zalo'
+            ? 'bg-blue-500/10 border-blue-500/30 text-blue-300'
+            : 'bg-[#1877F2]/10 border-[#1877F2]/30 text-[#1877F2]'
         }`}>
-          <span>{workflowMeta.channel === 'zalo' ? 'Kênh: Zalo' : 'Kênh: Facebook (tạm khóa)'}</span>
+          <span>Kênh: {channelLabel}</span>
         </div>
 
         {/* ── Page selector ─────────────────────────────────────────── */}
@@ -561,12 +555,12 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
           {showPagePicker && (
             <div className="absolute top-full left-0 mt-1 z-50 bg-gray-900 border border-gray-700 rounded-xl shadow-xl min-w-[220px] py-2">
               <p className="text-[11px] text-gray-500 px-3 pb-1.5 font-medium uppercase tracking-wider">
-                Workflow áp dụng cho tài khoản Zalo
+                Workflow áp dụng cho tài khoản {channelLabel}
               </p>
-              {accounts.length === 0 && (
-                <p className="text-gray-600 text-xs px-3 py-2">Chưa có tài khoản nào</p>
+              {filteredAccounts.length === 0 && (
+                <p className="text-gray-600 text-xs px-3 py-2">Chưa có tài khoản {channelLabel} nào</p>
               )}
-              {accounts.map(acc => (
+              {filteredAccounts.map(acc => (
                 <label key={acc.zalo_id} className="flex items-center gap-2.5 px-3 py-2 hover:bg-gray-800 cursor-pointer">
                   <input
                     type="checkbox"
@@ -587,8 +581,8 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
               <div className="border-t border-gray-800 mt-1 pt-1 px-3">
                 <p className="text-[11px] text-gray-600 leading-relaxed">
                   {workflowMeta.pageIds.length === 0
-                    ? '⚠ Chưa chọn tài khoản — workflow sẽ chạy cho TẤT CẢ tài khoản Zalo'
-                    : `✓ Sẽ chạy cho ${workflowMeta.pageIds.length} tài khoản Zalo đã chọn`}
+                    ? `⚠ Chưa chọn tài khoản — workflow sẽ chạy cho TẤT CẢ tài khoản ${channelLabel} (${filteredAccounts.length})`
+                    : `✓ Sẽ chạy cho ${workflowMeta.pageIds.length} tài khoản ${channelLabel} đã chọn`}
                 </p>
               </div>
             </div>
@@ -636,13 +630,13 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
 
           <div className="w-px h-4 bg-gray-700" />
 
-          <button onClick={handleRunClick} disabled={running || workflowUnsupported}
+          <button onClick={handleRunClick} disabled={running}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:opacity-40 text-white text-xs font-medium rounded-xl transition-colors">
             {running ? <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               : <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>}
             Chạy thử
           </button>
-          <button onClick={handleSave} disabled={saving || workflowUnsupported}
+          <button onClick={handleSave} disabled={saving}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-medium rounded-xl transition-colors">
             {saving ? <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>}
@@ -653,7 +647,7 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
 
       {/* Main area */}
       <div className="flex flex-1 overflow-hidden" onClick={() => setShowPagePicker(false)}>
-        <NodePalette />
+        <NodePalette channel={workflowMeta.channel} />
 
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="flex-1 relative" onDrop={onDrop} onDragOver={e => e.preventDefault()}
@@ -691,6 +685,8 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
         {selectedNode && (
           <NodeConfigPanel
             node={selectedNode}
+            nodes={nodes}
+            edges={edges}
             onConfigChange={cfg => updateNodeConfig(selectedNode.id, cfg)}
             onLabelChange={label => updateNodeLabel(selectedNode.id, label)}
             onClose={() => setSelectedNode(null)}
@@ -714,6 +710,7 @@ export default function WorkflowEditor({ workflowId, onBack }: Props) {
         <WorkflowAIDialog
           currentNodes={buildWorkflow().nodes}
           currentEdges={buildWorkflow().edges}
+          channel={workflowMeta.channel}
           onApply={handleAIApply}
           onClose={() => setShowAIDialog(false)}
         />

@@ -6,6 +6,98 @@ interface Props {
   workflowId: string;
 }
 
+/** Format a value for display — truncate long strings, beautify JSON */
+function formatValue(v: any, maxLen = 300): string {
+  if (v === null || v === undefined) return '∅';
+  if (typeof v === 'string') {
+    if (v.length > maxLen) return v.substring(0, maxLen) + '...';
+    return v;
+  }
+  if (typeof v === 'object') {
+    try {
+      const str = JSON.stringify(v, null, 2);
+      if (str.length > maxLen * 2) return str.substring(0, maxLen * 2) + '\n...(truncated)';
+      return str;
+    } catch { return String(v); }
+  }
+  return String(v);
+}
+
+/** Collapsible inline node result with input/output details */
+function NodeResultDetail({ nr, isLight }: { nr: any; isLight: boolean }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const nodeIcon = (s: string) => s === 'success' ? '✅' : s === 'error' ? '❌' : '⏭️';
+
+  const hasInput = nr.input && Object.keys(nr.input).length > 0 && nr.input._skipped !== true;
+  const hasOutput = nr.output && Object.keys(nr.output).length > 0 && nr.output._skipped !== true;
+  const hasError = nr.error || nr.output?._errorType;
+  const bg = isLight ? 'bg-gray-100' : 'bg-gray-800';
+
+  return (
+    <div className="mb-1">
+      {/* Header row */}
+      <button
+        className="flex items-center gap-1.5 w-full text-left hover:opacity-80"
+        onClick={() => setShowDetails(!showDetails)}
+      >
+        <span>{nodeIcon(nr.status)}</span>
+        <span className={isLight ? 'text-gray-700' : 'text-gray-300'}>{nr.label || nr.nodeType}</span>
+        <span className={isLight ? 'text-gray-400' : 'text-gray-500'}>{nr.durationMs}ms</span>
+        {hasError && <span className="text-red-500 text-[10px] truncate max-w-[200px]">{nr.error || nr.output?._errorMessage}</span>}
+        {(hasInput || hasOutput || hasError) && (
+          <span className={`ml-auto text-[10px] ${isLight ? 'text-gray-400' : 'text-gray-600'}`}>
+            {showDetails ? '▲' : '▼'} chi tiết
+          </span>
+        )}
+      </button>
+
+      {/* Expanded details */}
+      {showDetails && (
+        <div className={`ml-5 mt-0.5 p-2 rounded text-[10px] font-mono leading-relaxed ${bg}`}>
+          {/* Error details */}
+          {nr.output?._errorType && (
+            <div className="mb-2 border-l-2 border-red-500 pl-2">
+              <div className="text-red-500 font-semibold mb-0.5">❌ LỖI: {nr.output._errorType}</div>
+              {nr.output._httpStatus && <div className={isLight ? 'text-gray-600' : 'text-gray-400'}>HTTP {nr.output._httpStatus} {nr.output._httpStatusText}</div>}
+              {nr.output._errorCode && <div className={isLight ? 'text-gray-600' : 'text-gray-400'}>Code: {nr.output._errorCode}</div>}
+              {nr.output._errorMessage && <div className="text-red-400">{nr.output._errorMessage}</div>}
+              {nr.output._responseData && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-orange-500">Response body</summary>
+                  <pre className="mt-0.5 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{formatValue(nr.output._responseData)}</pre>
+                </details>
+              )}
+              {nr.output._requestSummary && <div className={isLight ? 'text-gray-500' : 'text-gray-500'}>Request: {nr.output._requestSummary}</div>}
+              {nr.output._stackTrace && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-gray-500">Stack trace</summary>
+                  <pre className="mt-0.5 whitespace-pre-wrap text-[9px] text-gray-500">{nr.output._stackTrace}</pre>
+                </details>
+              )}
+            </div>
+          )}
+
+          {/* Input (rendered config) */}
+          {hasInput && (
+            <details className="mb-1">
+              <summary className="cursor-pointer text-blue-500">📥 Đầu vào (input)</summary>
+              <pre className="mt-0.5 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">{formatValue(nr.input)}</pre>
+            </details>
+          )}
+
+          {/* Output (response data) */}
+          {hasOutput && (
+            <details>
+              <summary className="cursor-pointer text-green-500">📤 Đầu ra (output)</summary>
+              <pre className="mt-0.5 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">{formatValue(nr.output)}</pre>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function RunHistoryPanel({ workflowId }: Props) {
   const [logs, setLogs] = useState<any[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -38,7 +130,6 @@ export default function RunHistoryPanel({ workflowId }: Props) {
   };
 
   const statusIcon = (s: string) => s === 'success' ? '✅' : s === 'error' ? '❌' : '⚠️';
-  const nodeIcon = (s: string) => s === 'success' ? '✅' : s === 'error' ? '❌' : '⏭️';
 
   if (!workflowId) return null;
 
@@ -129,12 +220,7 @@ export default function RunHistoryPanel({ workflowId }: Props) {
                     <p className="text-red-500 text-[11px] mb-1">⚠ {log.errorMessage}</p>
                   )}
                   {(log.nodeResults || []).map((nr: any) => (
-                    <div key={nr.nodeId} className="flex items-start gap-2">
-                      <span>{nodeIcon(nr.status)}</span>
-                      <span className={isLight ? 'text-gray-600' : 'text-gray-400'}>{nr.label || nr.nodeType}</span>
-                      <span className={isLight ? 'text-gray-400' : 'text-gray-600'}>{nr.durationMs}ms</span>
-                      {nr.error && <span className="text-red-500 truncate">{nr.error}</span>}
-                    </div>
+                    <NodeResultDetail key={nr.nodeId} nr={nr} isLight={isLight} />
                   ))}
                 </div>
               )}

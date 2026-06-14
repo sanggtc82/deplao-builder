@@ -166,10 +166,13 @@ class FileStorageService {
                             }
                         }
                     } else if (isPng) {
-                        // PNG phải có IEND chunk ở cuối (12 bytes cuối)
-                        if (tailBytesRead >= 12) {
+                        // PNG phải có IEND chunk ở cuối cùng
+                        // Cấu trúc 12 bytes cuối: [len:4][type:4][crc:4]
+                        //   len=0x00000000, type="IEND", crc=CRC32("IEND")
+                        // Cần check 8 bytes cuối: type("IEND") + CRC
+                        if (tailBytesRead >= 8) {
                             const iendSig = Buffer.from([0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82]);
-                            const tailSlice = tailBuf.slice(tailBytesRead - 12, tailBytesRead - 4);
+                            const tailSlice = tailBuf.slice(tailBytesRead - 8);
                             if (!tailSlice.equals(iendSig)) {
                                 return { valid: false, reason: 'truncated' };
                             }
@@ -349,6 +352,7 @@ class FileStorageService {
         filename?: string,
         cookiesJson?: string,
         userAgent?: string,
+        referer?: string,
     ): Promise<string> {
         try {
             const dir = this.getAccountDir(zaloId);
@@ -366,7 +370,7 @@ class FileStorageService {
 
             const headers: Record<string, string> = {
                 'User-Agent': userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Referer': 'https://chat.zalo.me/',
+                'Referer': referer || 'https://chat.zalo.me/',
             };
             if (cookiesJson) {
                 const cookieHeader = this.buildCookieHeader(cookiesJson);

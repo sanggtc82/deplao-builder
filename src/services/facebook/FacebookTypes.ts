@@ -41,7 +41,7 @@ export interface FBLoginResult {
 
 // ─── Account ─────────────────────────────────────────────────────────────────
 
-export type FBAccountStatus = 'connected' | 'disconnected' | 'connecting' | 'error' | 'cookie_expired';
+export type FBAccountStatus = 'connected' | 'disconnected' | 'connecting' | 'error' | 'cookie_expired' | 'max_retries';
 
 export interface FBAccountRecord {
   id: string;             // UUID nội bộ
@@ -195,6 +195,15 @@ export interface FBMQTTAttachment {
   fileSize?: number;
   /** MIME type */
   mimeType?: string;
+  // ─── E2EE media download fields ──────────────────────────────────────
+  /** Direct path for E2EE media download via bridge */
+  directPath?: string;
+  /** Media key (base64) for E2EE decryption */
+  mediaKey?: string;
+  /** Media SHA256 hash (base64) for E2EE verification */
+  mediaSha256?: string;
+  /** Encrypted media SHA256 hash (base64) for E2EE decryption */
+  mediaEncSha256?: string;
 }
 
 export interface FBMQTTMessage {
@@ -208,9 +217,91 @@ export interface FBMQTTMessage {
   attachments: FBMQTTAttachment;
   /** All attachments when message contains multiple (e.g. batch image send) */
   allAttachments?: FBMQTTAttachment[];
+  /** ID of the message being replied to (if this is a reply) */
+  replyToMessageId?: string;
+  /** Sender ID of the message being replied to */
+  replyToSenderId?: string;
+  // ─── E2EE fields (set when message comes from E2EE bridge) ──────────────
+  /** E2EE chat JID (e.g. "100012345678@msgr") — only for 1:1 encrypted messages */
+  chatJid?: string;
+  /** E2EE sender JID — sender's identity in encrypted chat */
+  senderJid?: string;
+  /** Whether this message was decrypted by the E2EE bridge */
+  isE2EE?: boolean;
 }
 
-export type FBConnectionStatus = 'connected' | 'disconnected' | 'connecting' | 'error';
+// ─── E2EE Bridge Types ───────────────────────────────────────────────────────
+
+/** E2EE bridge connection status */
+export type FBE2EEStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+/** Configuration passed to the Go bridge's newClient method */
+export interface FBE2EEBridgeConfig {
+  cookies: Record<string, string>;
+  platform: 'facebook';
+  logLevel: 'none' | 'error' | 'warn' | 'info' | 'debug';
+  e2eeMemoryOnly: boolean;
+  devicePath?: string;
+}
+
+/** JSON-RPC request sent to the Go bridge */
+export interface FBJsonRpcRequest {
+  id: number;
+  method: string;
+  params?: any;
+}
+
+/** JSON-RPC success response from the Go bridge */
+export interface FBJsonRpcResponse {
+  id: number;
+  ok: boolean;
+  data?: any;
+  error?: string;
+}
+
+/** Async event emitted by the Go bridge (no `id` field) */
+export interface FBJsonRpcEvent {
+  event: {
+    type: string;
+    data: any;
+    timestamp: number;
+  };
+}
+
+/** Payload for sending E2EE messages */
+export interface FBE2EESendPayload {
+  chatJid: string;
+  text: string;
+  replyToId?: string;
+  replyToSenderJid?: string;
+}
+
+/** Result from sending an E2EE message */
+export interface FBE2EESendResult {
+  messageId?: string;
+  timestampMs?: number;
+}
+
+/** E2EE message shape from bridge — normalized before passing to handleIncomingMessage */
+export interface FBE2EEMessageRaw {
+  id: string;
+  text: string | null;
+  timestampMs: number;
+  senderId: string;
+  threadId: string;
+  chatJid?: string;
+  senderJid?: string;
+  mentions?: any[];
+  attachments?: any[];
+  type: 'e2ee';
+  /** Original message being replied to (if this message is a reply) */
+  replyTo?: {
+    messageId: string;
+    senderId: string;
+  };
+}
+
+export type FBConnectionStatus = 'connected' | 'disconnected' | 'connecting' | 'error' | 'cookie_expired' | 'max_retries';
 
 // ─── IPC Payloads ─────────────────────────────────────────────────────────────
 

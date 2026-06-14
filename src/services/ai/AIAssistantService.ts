@@ -12,43 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import DatabaseService from '../database/DatabaseService';
 import IntegrationRegistry from '../integrations/IntegrationRegistry';
 import Logger from '../../utils/Logger';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-export type AIPlatform = 'openai' | 'gemini' | 'claude' | 'deepseek' | 'grok' | 'mistral';
-
-export interface AIAssistant {
-  id: string;
-  name: string;
-  platform: AIPlatform;
-  apiKey: string;          // Decrypted at runtime
-  model: string;
-  systemPrompt: string;
-  posIntegrationId: string | null;  // FK → integrations.id for product data
-  pinnedProductsJson: string;       // JSON array of {id,name,price,code,image} — user-selected products for AI context
-  maxTokens: number;
-  temperature: number;
-  contextMessageCount: number;
-  enabled: boolean;
-  isDefault: boolean;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface AIAssistantFile {
-  id: number;
-  assistantId: string;
-  fileName: string;
-  filePath: string;
-  fileSize: number;
-  contentText: string;     // Extracted text for context injection
-  createdAt: number;
-}
-
-export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
+import type { AIAssistant, AIAssistantFile, ChatMessage, AIPlatform } from '../../models';
 
 // ─── Encryption helpers ───────────────────────────────────────────────────────
 
@@ -80,9 +44,33 @@ function getOpenAICompatibleUrl(platform: string): string {
     case 'deepseek': return 'https://api.deepseek.com/v1/chat/completions';
     case 'grok':     return 'https://api.x.ai/v1/chat/completions';
     case 'mistral':  return 'https://api.mistral.ai/v1/chat/completions';
+    case '9router':  return 'http://localhost:20128/v1/chat/completions';
     case 'openai':
     default:         return 'https://api.openai.com/v1/chat/completions';
   }
+}
+
+/** Resolve API URL — uses baseUrl override if set, otherwise falls back to default */
+function resolveApiUrl(platform: string, model: string, apiKey: string, baseUrl: string | null): string {
+  if (baseUrl) {
+    const base = baseUrl.replace(/\/+$/, '');
+    // If baseUrl already points to a full endpoint path, use it as-is
+    if (base.endsWith('/chat/completions') || base.match(/\/v\d+\/chat\/completions$/)) {
+      return base;
+    }
+    if (platform === 'gemini') {
+      return `${base}/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    } else if (platform === 'claude') {
+      return `${base}/v1/messages`;
+    }
+    return `${base}/v1/chat/completions`;
+  }
+  if (platform === 'gemini') {
+    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  } else if (platform === 'claude') {
+    return 'https://api.anthropic.com/v1/messages';
+  }
+  return getOpenAICompatibleUrl(platform);
 }
 
 /** Normalize legacy/incorrect model names to current API model IDs */
@@ -175,12 +163,13 @@ class AIAssistantService {
       db.run(`UPDATE ai_assistants SET is_default = 0`);
     }
 
-    db.run(`INSERT INTO ai_assistants (id, name, platform, api_key_encrypted, model, system_prompt, pos_integration_id, pinned_products_json, max_tokens, temperature, context_message_count, enabled, is_default, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    db.run(`INSERT INTO ai_assistants (id, name, platform, api_key_encrypted, model, system_prompt, base_url, pos_integration_id, pinned_products_json, max_tokens, temperature, context_message_count, enabled, is_default, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               name = excluded.name, platform = excluded.platform,
               api_key_encrypted = CASE WHEN excluded.api_key_encrypted = '***' THEN ai_assistants.api_key_encrypted ELSE excluded.api_key_encrypted END,
               model = excluded.model, system_prompt = excluded.system_prompt,
+              base_url = excluded.base_url,
               pos_integration_id = excluded.pos_integration_id,
               pinned_products_json = excluded.pinned_products_json,
               max_tokens = excluded.max_tokens, temperature = excluded.temperature,
@@ -189,7 +178,8 @@ class AIAssistantService {
               updated_at = excluded.updated_at`,
       [
         id, data.name, data.platform, encrypted, data.model,
-        data.systemPrompt || '', data.posIntegrationId || null,
+        data.systemPrompt || '', data.baseUrl || null,
+        data.posIntegrationId || null,
         pinnedJson,
         data.maxTokens || 1000, data.temperature ?? 0.7,
         data.contextMessageCount || 30,
@@ -360,12 +350,15 @@ VÍ DỤ ĐẦU RA ĐÚNG:
     let totalTokens = 0;
 
     try {
+      const geminiApiUrl = resolveApiUrl('gemini', model, assistant.apiKey, assistant.baseUrl);
+      const claudeApiUrl = resolveApiUrl('claude', model, assistant.apiKey, assistant.baseUrl);
+      const openaiApiUrl = resolveApiUrl(assistant.platform, model, assistant.apiKey, assistant.baseUrl);
+
       if (assistant.platform === 'gemini') {
         const geminiContents = openaiMessagesToGemini(messages);
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${keyPreview}`;
-        Logger.info(`[AIAssistant] Gemini URL (masked): ${geminiUrl}`);
+        Logger.info(`[AIAssistant] Gemini URL (masked): ${geminiApiUrl.replace(assistant.apiKey, '***')}`);
         const res = await axios.post(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${assistant.apiKey}`,
+          geminiApiUrl,
           {
             contents: geminiContents,
             generationConfig: { maxOutputTokens: maxTokens, temperature },
@@ -377,14 +370,13 @@ VÍ DỤ ĐẦU RA ĐÚNG:
         completionTokens = res.data.usageMetadata?.candidatesTokenCount || 0;
         totalTokens = promptTokens + completionTokens;
       } else if (assistant.platform === 'claude') {
-        // Anthropic Claude Messages API
-        Logger.info(`[AIAssistant] Claude URL: https://api.anthropic.com/v1/messages`);
+        Logger.info(`[AIAssistant] Claude URL: ${claudeApiUrl}`);
         const systemText = messages.filter(m => m.role === 'system').map(m => m.content).join('\n');
         const claudeMessages = messages
           .filter(m => m.role !== 'system')
           .map(m => ({ role: m.role === 'assistant' ? 'assistant' as const : 'user' as const, content: m.content }));
         const res = await axios.post(
-          'https://api.anthropic.com/v1/messages',
+          claudeApiUrl,
           {
             model,
             max_tokens: maxTokens,
@@ -405,13 +397,12 @@ VÍ DỤ ĐẦU RA ĐÚNG:
         completionTokens = res.data.usage?.output_tokens || 0;
         totalTokens = promptTokens + completionTokens;
       } else {
-        const apiUrl = getOpenAICompatibleUrl(assistant.platform);
-        Logger.info(`[AIAssistant] OpenAI-compat URL: ${apiUrl}, model: ${model}`);
+        Logger.info(`[AIAssistant] OpenAI-compat URL: ${openaiApiUrl}, model: ${model}`);
         const tokenParam = assistant.platform === 'openai'
           ? { max_completion_tokens: maxTokens }
           : { max_tokens: maxTokens };
         const res = await axios.post(
-          apiUrl,
+          openaiApiUrl,
           { model, messages, ...tokenParam, temperature },
           {
             headers: {
@@ -674,6 +665,7 @@ VÍ DỤ ĐẦU RA ĐÚNG:
       apiKey: decryptApiKey(row.api_key_encrypted),
       model: row.model,
       systemPrompt: row.system_prompt || '',
+      baseUrl: row.base_url || null,
       posIntegrationId: row.pos_integration_id || null,
       pinnedProductsJson: row.pinned_products_json || '[]',
       maxTokens: row.max_tokens || 1000,

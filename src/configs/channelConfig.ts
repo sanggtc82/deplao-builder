@@ -59,6 +59,21 @@ export interface ChannelCapability {
   supportsLabel: boolean;
   supportsSeenStatus: boolean;
   supportsTypingIndicator: boolean;
+  supportsCRMSearch: boolean;
+  supportsCRMHistory: boolean;
+  supportsCRMPhoneImport: boolean;
+  supportsCRMGroups: boolean;
+  supportsScanData: boolean;
+
+  // ─── Additional capabilities ───────────────────────────────
+  supportsChangeGroupAvatar: boolean;
+  supportsGroupManage: boolean;
+  supportsPendingApproval: boolean;
+  supportsLeaveGroup: boolean;
+  supportsGroupReload: boolean;
+  supportsQuickMessages: boolean;
+  supportsInviteToGroup: boolean;
+  supportsCampaigns: boolean;
 
   // ─── Đăng nhập ─────────────────────────────────────────────
   loginMethods: ('qr' | 'cookie' | 'auth_json' | 'credentials')[];
@@ -113,8 +128,22 @@ export const CHANNEL_CONFIG: Record<Channel, ChannelCapability> = {
     supportsLabel: true,
     supportsSeenStatus: true,
     supportsTypingIndicator: true,
+    supportsCRMSearch: true,
+    supportsCRMHistory: true,
+    supportsCRMPhoneImport: true,
+    supportsCRMGroups: true,
+    supportsScanData: false,
 
     loginMethods: ['qr', 'cookie', 'auth_json'],
+
+    supportsChangeGroupAvatar: true,
+    supportsGroupManage: true,
+    supportsPendingApproval: true,
+    supportsLeaveGroup: true,
+    supportsGroupReload: true,
+    supportsQuickMessages: true,
+    supportsInviteToGroup: true,
+    supportsCampaigns: true,
   },
 
   facebook: {
@@ -133,13 +162,13 @@ export const CHANNEL_CONFIG: Record<Channel, ChannelCapability> = {
     supportsAudio: true,
     supportsGif: true,
     supportsSticker: false,
-    supportsPoll: false,
+    supportsPoll: true,
     supportsReminder: false,
     supportsReply: true,
     supportsReaction: true,
     supportsUnsend: true,
-    supportsForward: false,
-    supportsPin: false,
+    supportsForward: true,
+    supportsPin: true,
 
     supportsBusinessCard: false,
     supportsBankCard: false,
@@ -149,7 +178,7 @@ export const CHANNEL_CONFIG: Record<Channel, ChannelCapability> = {
     supportsPinConversation: false,
     supportsCreateGroup: false,
     supportsMutualGroups: false,
-    supportsBlock: false,
+    supportsBlock: true,
     supportsReport: false,
     supportsRemoveFriend: false,
 
@@ -163,10 +192,24 @@ export const CHANNEL_CONFIG: Record<Channel, ChannelCapability> = {
 
     supportsFriendRequest: false,
     supportsLabel: false,
-    supportsSeenStatus: false,
+    supportsSeenStatus: true,
     supportsTypingIndicator: true,
+    supportsCRMSearch: false,
+    supportsCRMHistory: false,
+    supportsCRMPhoneImport: false,
+    supportsCRMGroups: false,
+    supportsScanData: true,
 
     loginMethods: ['cookie', 'credentials'],
+
+    supportsChangeGroupAvatar: false,
+    supportsGroupManage: false,
+    supportsPendingApproval: false,
+    supportsLeaveGroup: false,
+    supportsGroupReload: false,
+    supportsQuickMessages: false,
+    supportsInviteToGroup: false,
+    supportsCampaigns: false,
   },
 };
 

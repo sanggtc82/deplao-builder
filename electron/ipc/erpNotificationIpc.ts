@@ -26,5 +26,16 @@ export function registerErpNotificationIpc(): void {
   ipcMain.handle('erp:notify:unreadCount', withErpAuth('erp.access', async (_input: any, ctx) => ({
     count: svc().getUnreadCount(ctx.employeeId),
   })));
+
+  ipcMain.handle('erp:notify:delete', withErpAuth('erp.access', async (input: any) => {
+    const ids: number[] = Array.isArray(input?.ids) ? input.ids.map(Number).filter(Number.isFinite) : [];
+    svc().delete(ids);
+    return {};
+  }));
+
+  ipcMain.handle('erp:notify:deleteAll', withErpAuth('erp.access', async (_input: any, ctx) => {
+    svc().deleteAll(ctx.employeeId);
+    return {};
+  }));
 }
 

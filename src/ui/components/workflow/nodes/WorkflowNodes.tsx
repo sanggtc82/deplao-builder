@@ -152,11 +152,11 @@ export const LogicNode = memo(({ data }: NodeProps) => {
       ) : isSwitch ? (
         <>
           {(data.config?.cases || []).map((c: any, i: number) => (
-            <Handle key={c.label} type="source" position={Position.Bottom} id={c.label}
+            <Handle key={i} type="source" position={Position.Bottom} id={c[1] || c.label || String(i)}
               style={{ background: color, left: `${((i + 1) / ((data.config.cases.length || 1) + 2)) * 100}%` }} />
           ))}
           <Handle type="source" position={Position.Bottom} id={data.config?.defaultLabel || 'default'}
-            style={{ background: '#6b7280', right: 16, left: 'auto' }} />
+            style={{ background: '#6b7280', right: '1rem', left: 'auto' }} />
         </>
       ) : (
         <Handle type="source" position={Position.Bottom} id="default" style={{ background: color }} />

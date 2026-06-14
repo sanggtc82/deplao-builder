@@ -2,7 +2,9 @@ import { ipcMain } from 'electron';
 import DatabaseService from '../../src/services/database/DatabaseService';
 import CRMQueueService from '../../src/services/crm/CRMQueueService';
 import EventBroadcaster from '../../src/services/event/EventBroadcaster';
-import { proxyToBoss } from './proxyHelper';
+import AppModeManager from '../../src/utils/AppModeManager';
+import Logger from '../../src/utils/Logger';
+import { proxyToBoss, uploadEmployeeMedia } from './proxyHelper';
 
 export function registerCRMIpc(): void {
 
@@ -55,6 +57,33 @@ export function registerCRMIpc(): void {
             const id = DatabaseService.getInstance().saveCRMCampaign({ ...campaign, owner_zalo_id: zaloId });
             DatabaseService.getInstance().save();
             EventBroadcaster.emit('crm:campaignChanged', { action: 'save', ownerZaloId: zaloId, id, campaign });
+
+            // Upload embedded campaign images to Boss so they exist on Boss filesystem
+            if (AppModeManager.getInstance().getMode() === 'employee' && campaign?.template_message) {
+                try {
+                    const parsed = typeof campaign.template_message === 'string'
+                        ? JSON.parse(campaign.template_message)
+                        : campaign.template_message;
+                    if (parsed?.blocks && Array.isArray(parsed.blocks)) {
+                        let hasChanges = false;
+                        for (const block of parsed.blocks) {
+                            if (block.images && block.images.length > 0) {
+                                const bossPaths = await uploadEmployeeMedia(block.images, zaloId);
+                                block.images = bossPaths;
+                                hasChanges = true;
+                            }
+                        }
+                        if (hasChanges) {
+                            campaign.template_message = typeof campaign.template_message === 'string'
+                                ? JSON.stringify(parsed)
+                                : parsed;
+                        }
+                    }
+                } catch (uploadErr: any) {
+                    Logger.warn(`[crmIpc] Upload campaign images failed: ${uploadErr.message}`);
+                }
+            }
+
             proxyToBoss('crm:saveCampaign', { zaloId, campaign });
             return { success: true, id };
         } catch (e: any) { return { success: false, error: e.message }; }

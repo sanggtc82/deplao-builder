@@ -14,6 +14,72 @@ interface VersionEntry {
 // ─── Changelog data — thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.6.0',
+    date: '06/2026',
+    type: 'major',
+    highlights: [
+      '🤖 Hỗ trợ kênh chat Facebook Messenger (repo fbchat-v2) — đọc/gửi tin nhắn kể cả mã hoá đầu cuối',
+      '⚡ Workflow mở rộng — hỗ trợ triggers và actions mới cho Facebook',
+      '📊 CRM Quét dữ liệu Facebook — tìm kiếm nhóm, fanpage, bài viết theo từ khoá, quét bình luận, thành viên nhóm, thống kê & xuất Excel',
+      '🤖 Trợ lý AI tích hợp thêm 9Router - dịch vụ proxy API AI cho phép bạn gọi các model giá rẻ hoặc miễn phí.',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Facebook E2EE Bridge — binary Go (fbchat-bridge-e2ee.exe) xử lý mã hoá đầu cuối, build tự động qua predev',
+          'Facebook E2EE: đọc & gửi tin nhắn, media, sticker, reactions trong hội thoại mã hoá',
+          'Facebook: đăng nhập bằng cookie (bỏ beta), hướng dẫn lấy cookie + cảnh báo hết hạn',
+          'Facebook: block/unblock user, đổi theme, tạo note, làm mới thông tin user từ HTML (tên + avatar)',
+          'Facebook: upload attachment dùng manual multipart body (sửa lỗi 0KB), tải hội thoại cũ',
+          'Facebook: FBUserProfilePopup, FBVideoThumb, AccountAssignmentPopup',
+          'CRM Quét dữ liệu Facebook: tìm kiếm nhóm/fanpage/bài viết theo từ khoá, quét thành viên nhóm, bình luận bài viết',
+          'CRM Scan: auto-pagination với mục tiêu số lượng, batch scan nhiều ID cùng lúc, thread pool',
+          'CRM Scan: tab-based sessions — tạo nhiều tab quét, lưu cấu hình & kết quả, xem lịch sử, xuất Excel',
+          'CRM Scan: bộ lọc nâng cao — public groups, recent posts, lọc theo năm, từ khoá bình luận, phát hiện SĐT',
+          'CRM Scan: thống kê tổng quan — biểu đồ tròn tỷ lệ thành công, thanh so sánh, top tab nhiều dữ liệu, thống kê theo loại quét',
+          'CRM Scan: giao diện Chrome-style tabs, tối đa 5 tab hiển thị + overflow menu, đổi tên, lưu trữ, xoá tab',
+          'Workflow: Facebook triggers (message, friend request, group, reaction,...) & actions mới',
+          'Workflow: TemplateVarPopup — chọn biến động từ danh sách template variables',
+          'Workflow: mở rộng workflow templates và workflow config',
+          'Hệ thống models module mới — account, ai, contact, crm, employee, facebook, integration, message, proxy, workflow',
+          'Integration: Sửa lại giao diện và logic tích hợp AI platforms, thêm 9Router',
+          'channelConfig & channelIpc — cấu hình theo từng nền tảng (Zalo, Facebook, Telegram)',
+          'useChannelCapability hook — kiểm tra tính năng theo channel',
+          'Trang Donate trong IntroductionSettings',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Workflow Engine mở rộng — xử lý Facebook events, friend request, reaction, poll, group events',
+          'NodeConfigPanel — cấu hình node Facebook, template variables, HTML editor, contact picker',
+          'CRM Queue: daily_start_time tách riêng khỏi daily_send_limit, áp dụng cho mọi chiến dịch',
+          'CRM CampaignCreateModal: UI daily start time luôn hiển thị, logic cải tiến',
+          'CRM CampaignDetail & TargetSelector: dedup phone+UID, tránh trùng SĐT/UID khi import',
+          'IntegrationPage thiết kế lại — section AI platforms, saved integrations cải tiến',
+          'AIAssistantService cập nhật — hỗ trợ nhiều platform AI',
+          'IntroductionSettings: tách tích hợp thành POS/thanh toán/vận chuyển/AI, thêm Donate',
+          'ChatHeader: làm mới avatar Facebook từ CDN, reload thông tin user từ HTML',
+          'MessageInput: hỗ trợ Facebook, cập nhật UI',
+          'ChatWindow: hỗ trợ Facebook E2EE, cập nhật giao diện',
+          'GroupInfoPanel: xử lý Facebook group',
+          'TopBar: cập nhật giao diện, hỗ trợ Facebook',
+          'EmployeeService: cập nhật đồng bộ cho Facebook',
+          'HttpRelayService & HttpClientService: hỗ trợ relay Facebook events',
+          'appStore: thêm trạng thái cho Facebook',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Facebook attachment upload lỗi 0KB do form-data không tương thích — dùng manual multipart body',
+          'CRM: sửa lỗi phone resolve treo vô hạn (thêm timeout 15s)',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.4.8',
     date: '06/2026',
     type: 'minor',
@@ -98,7 +164,7 @@ const CHANGELOG: VersionEntry[] = [
       {
         category: 'new',
         items: [
-          'Giới hạn số liên hệ gửi/ngày cho chiến dịch CRM — cài đặt số lượng tối đa và giờ bắt đầu chạy ngày hôm sau, tự động dừng khi đạt giới hạn và tiếp tục vào ngày mới',
+          'Giới hạn số liên hệ gửi/ngày cho chiến dịch CRM — cài đặt số lượng tối đa và giờ bắt đầu chạy, tự động dừng khi đạt giới hạn và tiếp tục vào ngày mới. Nếu giờ đã qua hôm nay, chiến dịch chạy ngay.',
         ],
       },
       {

@@ -1,51 +1,77 @@
 // Node type configurations: default configs, labels, descriptions
-type NodeGroupItem = { type: string; label: string; desc: string };
+type ChannelTag = 'zalo' | 'facebook' | 'both';
+type NodeGroupItem = { type: string; label: string; desc: string; channel?: ChannelTag };
 type NodeGroup = { label: string; color: string; items: NodeGroupItem[] };
-
-export const WORKFLOW_UNSUPPORTED_NODE_PREFIXES = ['fb.'] as const;
-
-export function isUnsupportedWorkflowNodeType(type: string): boolean {
-  return WORKFLOW_UNSUPPORTED_NODE_PREFIXES.some(prefix => type.startsWith(prefix));
-}
 
 export const NODE_GROUPS: NodeGroup[] = [
   {
     label: 'Kích hoạt',
     color: 'bg-violet-500',
     items: [
-      { type: 'trigger.message',       label: 'Khi nhận tin nhắn',           desc: 'Kích hoạt khi có tin nhắn mới (cá nhân hoặc nhóm)' },
-      { type: 'trigger.friendRequest', label: 'Khi có lời mời kết bạn',      desc: 'Kích hoạt khi ai đó gửi lời mời kết bạn đến bạn' },
-      { type: 'trigger.groupEvent',    label: 'Khi có sự kiện nhóm',         desc: 'Kích hoạt khi thành viên vào/rời nhóm, thay đổi admin...' },
-      { type: 'trigger.reaction',      label: 'Khi có người react tin nhắn', desc: 'Kích hoạt khi ai đó thả cảm xúc vào tin nhắn' },
-      { type: 'trigger.labelAssigned', label: 'Khi gán hoặc gỡ nhãn',       desc: 'Kích hoạt khi Nhãn Local/Zalo được gán hoặc gỡ khỏi hội thoại' },
-      { type: 'trigger.schedule',      label: 'Chạy theo lịch hẹn',          desc: 'Tự động kích hoạt theo lịch (hàng ngày, hàng giờ...)' },
-      { type: 'trigger.manual',        label: 'Chạy thủ công',               desc: 'Kích hoạt bằng tay từ giao diện, dùng để test workflow' },
-      { type: 'trigger.payment',       label: 'Khi nhận thanh toán',         desc: 'Kích hoạt khi nhận webhook thanh toán từ Casso / SePay (VietQR)' },
+      // Zalo triggers
+      { type: 'trigger.message',        label: 'Khi nhận tin nhắn',             desc: 'Kích hoạt khi có tin nhắn mới (cá nhân hoặc nhóm) — Zalo', channel: 'zalo' },
+      { type: 'trigger.friendRequest', label: 'Khi có lời mời kết bạn',      desc: 'Kích hoạt khi ai đó gửi lời mời kết bạn đến bạn', channel: 'zalo' },
+      { type: 'trigger.groupEvent',    label: 'Khi có sự kiện nhóm',         desc: 'Kích hoạt khi thành viên vào/rời nhóm, thay đổi admin...', channel: 'zalo' },
+      { type: 'trigger.reaction',      label: 'Khi có người react tin nhắn', desc: 'Kích hoạt khi ai đó thả cảm xúc vào tin nhắn', channel: 'zalo' },
+      { type: 'trigger.labelAssigned', label: 'Khi gán hoặc gỡ nhãn',       desc: 'Kích hoạt khi Nhãn Local/Zalo được gán hoặc gỡ khỏi hội thoại', channel: 'zalo' },
+      { type: 'trigger.schedule',      label: 'Chạy theo lịch hẹn',          desc: 'Tự động kích hoạt theo lịch (hàng ngày, hàng giờ...)', channel: 'both' },
+      { type: 'trigger.manual',        label: 'Chạy thủ công',               desc: 'Kích hoạt bằng tay từ giao diện, dùng để test workflow', channel: 'both' },
+      { type: 'trigger.payment',       label: 'Khi nhận thanh toán',         desc: 'Kích hoạt khi nhận webhook thanh toán từ Casso / SePay (VietQR)', channel: 'both' },
+      // Facebook triggers
+      { type: 'fb.trigger.message',    label: 'Khi nhận tin nhắn',           desc: 'Kích hoạt khi có tin nhắn mới trên Facebook Messenger', channel: 'facebook' },
+      { type: 'fb.trigger.image',      label: 'Khi nhận tin nhắn ảnh',       desc: 'Kích hoạt khi nhận được tin nhắn chứa ảnh trên Messenger', channel: 'facebook' },
+      { type: 'fb.trigger.video',      label: 'Khi nhận tin nhắn video',     desc: 'Kích hoạt khi nhận được tin nhắn video trên Messenger', channel: 'facebook' },
+      { type: 'fb.trigger.file',       label: 'Khi nhận tin nhắn file',      desc: 'Kích hoạt khi nhận được tin nhắn file trên Messenger', channel: 'facebook' },
+      { type: 'fb.trigger.sticker',    label: 'Khi nhận sticker',             desc: 'Kích hoạt khi nhận được sticker trên Messenger', channel: 'facebook' },
+      { type: 'fb.trigger.reaction',   label: 'Khi có reaction',             desc: 'Kích hoạt khi ai đó thả cảm xúc vào tin nhắn Messenger', channel: 'facebook' },
+      { type: 'fb.trigger.unsend',     label: 'Khi thu hồi tin nhắn',        desc: 'Kích hoạt khi ai đó thu hồi tin nhắn trên Messenger', channel: 'facebook' },
+      { type: 'fb.trigger.groupEvent', label: 'Khi có sự kiện nhóm',         desc: 'Kích hoạt khi thành viên vào/rời nhóm Facebook', channel: 'facebook' },
+    ],
+  },
+  {
+    label: 'Hành động',
+    color: 'bg-blue-600',
+    items: [
+      { type: 'fb.action.sendMessage',    label: 'Gửi tin nhắn',              desc: 'Gửi tin nhắn văn bản đến hội thoại Facebook', channel: 'facebook' },
+      { type: 'fb.action.sendImage',      label: 'Gửi ảnh/file',              desc: 'Upload và gửi ảnh/file vào hội thoại Facebook', channel: 'facebook' },
+      { type: 'fb.action.addReaction',    label: 'Thả reaction',               desc: 'Thả emoji reaction vào tin nhắn Facebook', channel: 'facebook' },
+      { type: 'fb.action.unsend',         label: 'Thu hồi tin nhắn',          desc: 'Thu hồi tin nhắn đã gửi trên Facebook', channel: 'facebook' },
+      { type: 'fb.action.editMessage',    label: 'Chỉnh sửa tin nhắn',        desc: 'Chỉnh sửa nội dung tin nhắn đã gửi', channel: 'facebook' },
+      { type: 'fb.action.forward',        label: 'Chuyển tiếp tin nhắn',      desc: 'Chuyển tiếp tin nhắn sang hội thoại Facebook khác', channel: 'facebook' },
+      { type: 'fb.action.pin',            label: 'Ghim tin nhắn',             desc: 'Ghim tin nhắn trong hội thoại Facebook', channel: 'facebook' },
+      { type: 'fb.action.unpin',          label: 'Bỏ ghim tin nhắn',          desc: 'Bỏ ghim tin nhắn trong hội thoại Facebook', channel: 'facebook' },
+      { type: 'fb.action.createPoll',     label: 'Tạo bình chọn',             desc: 'Tạo cuộc bình chọn trong nhóm Facebook', channel: 'facebook' },
+      { type: 'fb.action.sendTyping',     label: 'Hiệu ứng đang gõ',          desc: 'Hiển thị trạng thái đang gõ trên Facebook', channel: 'facebook' },
+      { type: 'fb.action.markAsRead',     label: 'Đánh dấu đã đọc',           desc: 'Đánh dấu hội thoại Facebook đã đọc', channel: 'facebook' },
+      { type: 'fb.action.block',          label: 'Chặn người dùng',           desc: 'Chặn người dùng trên Facebook Messenger', channel: 'facebook' },
+      { type: 'fb.action.changeName',     label: 'Đổi tên nhóm',              desc: 'Đổi tên nhóm Facebook', channel: 'facebook' },
+      { type: 'fb.action.changeEmoji',    label: 'Đổi biểu tượng nhóm',       desc: 'Đổi emoji đại diện cho nhóm Facebook', channel: 'facebook' },
+      { type: 'fb.action.changeNickname', label: 'Đổi biệt danh thành viên',  desc: 'Đổi nickname của thành viên trong nhóm Facebook', channel: 'facebook' },
     ],
   },
   {
     label: 'Thao tác',
     color: 'bg-blue-500',
     items: [
-      { type: 'zalo.sendMessage',        label: 'Gửi tin nhắn',               desc: 'Gửi tin nhắn văn bản đến hội thoại' },
-      { type: 'zalo.sendTyping',         label: 'Hiệu ứng đang gõ + chờ',    desc: 'Hiển thị "đang gõ..." rồi chờ vài giây trước bước tiếp' },
-      { type: 'zalo.sendImage',          label: 'Gửi ảnh',                    desc: 'Gửi ảnh từ file trên máy hoặc URL ảnh trực tiếp' },
-      { type: 'zalo.sendFile',           label: 'Gửi file đính kèm',          desc: 'Gửi file (PDF, Excel, ...) đến hội thoại' },
-      { type: 'zalo.findUser',           label: 'Tìm user bằng số điện thoại',desc: 'Tra cứu tài khoản Zalo theo SĐT để lấy User ID' },
-      { type: 'zalo.getUserInfo',        label: 'Lấy thông tin người dùng',   desc: 'Lấy tên, avatar, giới tính... từ User ID Zalo' },
-      { type: 'zalo.acceptFriendRequest',label: 'Chấp nhận lời mời kết bạn',  desc: 'Tự động chấp nhận lời mời kết bạn từ người dùng' },
-      { type: 'zalo.rejectFriendRequest',label: 'Từ chối lời mời kết bạn',    desc: 'Tự động từ chối lời mời kết bạn' },
-      { type: 'zalo.sendFriendRequest',  label: 'Gửi lời mời kết bạn',       desc: 'Chủ động gửi lời mời kết bạn đến User ID' },
-      { type: 'zalo.addToGroup',         label: 'Thêm thành viên vào nhóm',   desc: 'Thêm user vào một nhóm Zalo cụ thể' },
-      { type: 'zalo.removeFromGroup',    label: 'Xóa thành viên khỏi nhóm',   desc: 'Xóa user ra khỏi nhóm Zalo' },
-      { type: 'zalo.setMute',            label: 'Tắt/bật thông báo',          desc: 'Tắt hoặc bật lại thông báo cho hội thoại' },
-      { type: 'zalo.forwardMessage',     label: 'Chuyển tiếp tin nhắn',       desc: 'Chuyển tiếp tin nhắn sang hội thoại khác' },
-      { type: 'zalo.undoMessage',        label: 'Thu hồi tin nhắn',           desc: 'Thu hồi (xóa 2 phía) một tin nhắn đã gửi' },
-      { type: 'zalo.createPoll',         label: 'Tạo bình chọn trong nhóm',   desc: 'Tạo cuộc bình chọn (poll) trong nhóm Zalo' },
-      { type: 'zalo.getMessageHistory',  label: 'Lấy lịch sử tin nhắn',       desc: 'Lấy N tin nhắn gần nhất từ hội thoại' },
-      { type: 'zalo.addReaction',        label: 'Thêm cảm xúc vào tin nhắn',  desc: 'Thả like, yêu thích, haha... vào tin nhắn' },
-      { type: 'zalo.assignLabel',        label: 'Gắn nhãn hội thoại',         desc: 'Gắn Nhãn Local hoặc Zalo cho hội thoại' },
-      { type: 'zalo.removeLabel',        label: 'Gỡ nhãn hội thoại',          desc: 'Gỡ Nhãn Local hoặc Zalo khỏi hội thoại' },
+      { type: 'zalo.sendMessage',        label: 'Gửi tin nhắn',               desc: 'Gửi tin nhắn văn bản đến hội thoại', channel: 'zalo' },
+      { type: 'zalo.sendTyping',         label: 'Hiệu ứng đang gõ + chờ',    desc: 'Hiển thị "đang gõ..." rồi chờ vài giây trước bước tiếp', channel: 'zalo' },
+      { type: 'zalo.sendImage',          label: 'Gửi ảnh',                    desc: 'Gửi ảnh từ file trên máy hoặc URL ảnh trực tiếp', channel: 'zalo' },
+      { type: 'zalo.sendFile',           label: 'Gửi file đính kèm',          desc: 'Gửi file (PDF, Excel, ...) đến hội thoại', channel: 'zalo' },
+      { type: 'zalo.findUser',           label: 'Tìm user bằng số điện thoại',desc: 'Tra cứu tài khoản Zalo theo SĐT để lấy User ID', channel: 'zalo' },
+      { type: 'zalo.getUserInfo',        label: 'Lấy thông tin người dùng',   desc: 'Lấy tên, avatar, giới tính... từ User ID Zalo', channel: 'zalo' },
+      { type: 'zalo.acceptFriendRequest',label: 'Chấp nhận lời mời kết bạn',  desc: 'Tự động chấp nhận lời mời kết bạn từ người dùng', channel: 'zalo' },
+      { type: 'zalo.rejectFriendRequest',label: 'Từ chối lời mời kết bạn',    desc: 'Tự động từ chối lời mời kết bạn', channel: 'zalo' },
+      { type: 'zalo.sendFriendRequest',  label: 'Gửi lời mời kết bạn',       desc: 'Chủ động gửi lời mời kết bạn đến User ID', channel: 'zalo' },
+      { type: 'zalo.addToGroup',         label: 'Thêm thành viên vào nhóm',   desc: 'Thêm user vào một nhóm Zalo cụ thể', channel: 'zalo' },
+      { type: 'zalo.removeFromGroup',    label: 'Xóa thành viên khỏi nhóm',   desc: 'Xóa user ra khỏi nhóm Zalo', channel: 'zalo' },
+      { type: 'zalo.setMute',            label: 'Tắt/bật thông báo',          desc: 'Tắt hoặc bật lại thông báo cho hội thoại', channel: 'zalo' },
+      { type: 'zalo.forwardMessage',     label: 'Chuyển tiếp tin nhắn',       desc: 'Chuyển tiếp tin nhắn sang hội thoại khác', channel: 'zalo' },
+      { type: 'zalo.undoMessage',        label: 'Thu hồi tin nhắn',           desc: 'Thu hồi (xóa 2 phía) một tin nhắn đã gửi', channel: 'zalo' },
+      { type: 'zalo.createPoll',         label: 'Tạo bình chọn trong nhóm',   desc: 'Tạo cuộc bình chọn (poll) trong nhóm Zalo', channel: 'zalo' },
+      { type: 'zalo.getMessageHistory',  label: 'Lấy lịch sử tin nhắn',       desc: 'Lấy N tin nhắn gần nhất từ hội thoại', channel: 'zalo' },
+      { type: 'zalo.addReaction',        label: 'Thêm cảm xúc vào tin nhắn',  desc: 'Thả like, yêu thích, haha... vào tin nhắn', channel: 'zalo' },
+      { type: 'zalo.assignLabel',        label: 'Gắn nhãn hội thoại',         desc: 'Gắn Nhãn Local hoặc Zalo cho hội thoại', channel: 'zalo' },
+      { type: 'zalo.removeLabel',        label: 'Gỡ nhãn hội thoại',          desc: 'Gỡ Nhãn Local hoặc Zalo khỏi hội thoại', channel: 'zalo' },
     ],
   },
   {
@@ -154,20 +180,7 @@ export const NODE_GROUPS: NodeGroup[] = [
   },
 ];
 
-const HIDDEN_NODE_GROUPS: NodeGroup[] = [
-  {
-    label: 'Facebook',
-    color: 'bg-blue-600',
-    items: [
-      { type: 'fb.trigger.message',    label: 'FB: Khi nhận tin nhắn nhóm', desc: 'Kích hoạt khi có tin nhắn mới trong nhóm Facebook' },
-      { type: 'fb.action.sendMessage', label: 'FB: Gửi tin nhắn',           desc: 'Gửi tin nhắn văn bản vào nhóm Facebook' },
-      { type: 'fb.action.addReaction', label: 'FB: Thả reaction',            desc: 'Thả emoji reaction vào tin nhắn Facebook' },
-      { type: 'fb.action.sendImage',   label: 'FB: Gửi ảnh/file',           desc: 'Upload và gửi file/ảnh vào nhóm Facebook' },
-    ],
-  },
-];
-
-const ALL_NODE_GROUPS: NodeGroup[] = [...NODE_GROUPS, ...HIDDEN_NODE_GROUPS];
+const ALL_NODE_GROUPS: NodeGroup[] = NODE_GROUPS;
 
 export const DEFAULT_CONFIGS: Record<string, Record<string, any>> = {
   'trigger.message':       { threadType: 'all', keyword: '', keywordMode: 'contains_any', ignoreOwn: true, debounceSeconds: 0 },
@@ -255,10 +268,29 @@ export const DEFAULT_CONFIGS: Record<string, Record<string, any>> = {
   'ghtk.createOrder': { integrationId: '', order: '{}' },
   'ghtk.getTracking': { integrationId: '', trackingCode: '' },
   // Facebook
-  'fb.trigger.message':    { accountId: '', threadId: '', keyword: '', keywordMode: 'contains_any' },
-  'fb.action.sendMessage': { accountId: '', threadId: '{{ $trigger.threadId }}', message: '' },
-  'fb.action.addReaction': { accountId: '', messageId: '{{ $trigger.messageId }}', emoji: '👍' },
-  'fb.action.sendImage':   { accountId: '', threadId: '{{ $trigger.threadId }}', filePath: '' },
+  'fb.trigger.message':    { threadId: '', keyword: '', keywordMode: 'contains_any', threadType: 'all', ignoreOwn: true, onlyOwn: false, fromId: '', groupId: '', debounceSeconds: 0 },
+  'fb.trigger.image':      { threadId: '' },
+  'fb.trigger.video':      { threadId: '' },
+  'fb.trigger.file':       { threadId: '' },
+  'fb.trigger.sticker':    { threadId: '' },
+  'fb.trigger.reaction':   { threadId: '', reactionType: 'any' },
+  'fb.trigger.unsend':     { threadId: '' },
+  'fb.trigger.groupEvent': { threadId: '', eventType: 'all' },
+  'fb.action.sendMessage': { threadId: '{{ $trigger.threadId }}', message: '' },
+  'fb.action.addReaction': { messageId: '{{ $trigger.messageId }}', emoji: '👍' },
+  'fb.action.sendImage':   { threadId: '{{ $trigger.threadId }}', filePath: '', body: '' },
+  'fb.action.unsend':      { messageId: '' },
+  'fb.action.editMessage': { messageId: '', text: '' },
+  'fb.action.forward':     { messageId: '', targetThreadId: '' },
+  'fb.action.pin':         { messageId: '', threadId: '{{ $trigger.threadId }}' },
+  'fb.action.unpin':       { messageId: '', threadId: '{{ $trigger.threadId }}' },
+  'fb.action.createPoll':  { threadId: '', question: '', options: 'Có\nKhông' },
+  'fb.action.sendTyping':  { threadId: '{{ $trigger.threadId }}', isTyping: true },
+  'fb.action.markAsRead':  { threadId: '{{ $trigger.threadId }}' },
+  'fb.action.block':       { userId: '' },
+  'fb.action.changeName':  { threadId: '', name: '' },
+  'fb.action.changeEmoji': { threadId: '', emoji: '' },
+  'fb.action.changeNickname': { threadId: '', userId: '', nickname: '' },
 };
 
 /** Map: nodeType → friendly Vietnamese label (auto-built from NODE_GROUPS) */
@@ -280,6 +312,7 @@ export function getNodeLabel(type: string): string {
 export function nodeTypeGroup(type: string): string {
   if (type.startsWith('trigger.')) return 'trigger';
   if (type.startsWith('zalo.'))    return 'action';
+  if (type.startsWith('fb.'))      return 'action';
   if (type.startsWith('logic.'))   return 'logic';
   if (type.startsWith('data.'))    return 'data';
   if (type.startsWith('sheets.'))  return 'integration';
@@ -291,7 +324,6 @@ export function nodeTypeGroup(type: string): string {
       type.startsWith('sapo.')     ||
       type.startsWith('nhanh.')    || type.startsWith('pancake.')) return 'integration';
   if (type.startsWith('payment.') || type.startsWith('ghn.') || type.startsWith('ghtk.')) return 'integration';
-  if (isUnsupportedWorkflowNodeType(type)) return 'integration';
   return 'action';
 }
 

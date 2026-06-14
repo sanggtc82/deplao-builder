@@ -168,7 +168,7 @@ function LivePreview({
                     block.images.length === 1 ? 'grid-cols-1'
                     : block.images.length <= 4 ? 'grid-cols-2'
                     : 'grid-cols-3'
-                  }`} style={{ maxWidth: 180 }}>
+                  }`} style={{ maxWidth: '11.25rem' }}>
                     {block.images.map((p, i) => (
                       <div key={i} className="aspect-square overflow-hidden rounded">
                         <img src={toLocalMediaUrl(p)} alt="" className="w-full h-full object-cover"
@@ -512,7 +512,7 @@ export default function CampaignCreateModal({
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div
         className="bg-gray-800 border border-gray-700 rounded-2xl w-full max-w-[1060px] shadow-2xl flex flex-col"
-        style={{ height: 'min(92vh, 680px)' }}
+        style={{ height: 'min(92vh, 42.5rem)' }}
         onClick={e => e.stopPropagation()}
       >
         {/* ── Topbar ── */}
@@ -629,21 +629,20 @@ export default function CampaignCreateModal({
                   />
                   <span className="text-[10px] text-gray-500 flex-shrink-0">liên hệ</span>
                 </div>
-                {dailyLimit > 0 && (
-                  <div>
-                    <label className="text-[10px] text-gray-500 block mb-1">Giờ bắt đầu ngày tiếp</label>
-                    <input
-                      type="time"
-                      value={dailyStartTime}
-                      onChange={e => setDailyStartTime(e.target.value || '08:00')}
-                      className="w-full bg-gray-900 border border-gray-600 rounded-lg px-2.5 py-2 text-xs text-gray-200 focus:outline-none focus:border-blue-500 transition-colors"
-                    />
-                  </div>
-                )}
+                <div>
+                  <label className="text-[10px] text-gray-500 block mb-1">Giờ bắt đầu chạy</label>
+                  <input
+                    type="time"
+                    value={dailyStartTime}
+                    onChange={e => setDailyStartTime(e.target.value || '08:00')}
+                    className="w-full bg-gray-900 border border-gray-600 rounded-lg px-2.5 py-2 text-xs text-gray-200 focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                  <p className="text-[10px] text-gray-600 mt-0.5">Nếu giờ này đã qua hôm nay, chiến dịch chạy ngay</p>
+                </div>
               </div>
               <p className="text-[10px] text-gray-600 mt-1">
                 {dailyLimit > 0
-                  ? `Gửi tối đa ${dailyLimit}/ngày, bắt đầu lúc ${dailyStartTime}`
+                  ? `Gửi tối đa ${dailyLimit}/ngày từ ${dailyStartTime}`
                   : 'Gửi không giới hạn (theo token bucket)'}
               </p>
             </div>

@@ -16,12 +16,14 @@ import { useAppStore } from '@/store/appStore';
 
 /**
  * Generate human-readable preview from FB attachment metadata
+ * Giữ nguyên type gốc (sticker, image, video...) để MessageBubbles
+ * tự quyết định render dựa trên msg_type.
  */
 function fbAttachmentPreview(attachType: string, attObj: any): string {
   if (attachType === 'image' || attachType === 'photo') return '🖼️ Hình ảnh';
   if (attachType === 'video') return '🎬 Video';
   if (attachType === 'audio') return '🎵 Audio';
-  if (attachType === 'sticker') return '[Sticker]';
+  if (attachType === 'sticker') return '🎨 Sticker';
   const name = attObj?.name;
   if (name) return `📎 ${name}`;
   if (attachType) return '📎 Tệp đính kèm';
@@ -30,39 +32,62 @@ function fbAttachmentPreview(attachType: string, attObj: any): string {
 
 /**
  * Normalize một FB MQTT message → MessageItem format của chatStore
+ * Giữ nguyên attachment type gốc — MessageBubbles tự quyết định render.
+ * loadMessageFromDB (saveFBMessage) map sticker→image nhưng live event
+ * để nguyên type để StickerBubble/MediaBubble xử lý phù hợp.
  */
 function normalizeFBMessage(fbAccountId: string, msg: any): MessageItem {
   const threadId = msg.replyToID || msg.threadId || '';
-  const hasAttachment = !!(msg.attachments?.id && msg.attachments.id !== 0);
-  // Use attachmentType from MQTT if available (set by processDelta in FacebookMQTTListener)
-  const attachType: string = msg.attachments?.attachmentType || (hasAttachment ? 'file' : '');
-  const msgType = hasAttachment ? (attachType || 'file') : 'text';
+
+  // hasAttachment: kiểm tra id hợp lệ + có url hoặc attachmentType
+  const hasAttachment = !!(msg.attachments?.id && msg.attachments.id !== 0 &&
+    (msg.attachments.url || msg.attachments.attachmentType));
+
+  // rawType: giữ nguyên type gốc từ MQTT (sticker, image, video, file...)
+  const rawType = !hasAttachment ? 'text' : (msg.attachments.attachmentType || 'image');
+  // KHÔNG map sticker→image ở đây — để MessageBubbles.isStickerType xử lý
+  const msgType = rawType;
+
+  if (rawType === 'sticker') {
+    console.log(`[useChatEvents] [STICKER] normalizeFBMessage: fbAccountId=${fbAccountId} msgId=${msg.messageID} threadId=${threadId} rawType=${rawType} msgType=${msgType} url=${(msg.attachments?.url || '').slice(0,100)}`);
+  }
 
   // Generate display content: body text OR attachment preview
-  const attachPreview = hasAttachment ? fbAttachmentPreview(attachType, msg.attachments) : '';
+  const attachPreview = fbAttachmentPreview(rawType, msg.attachments);
   // FB sometimes sends body as "[file: name]" or "[image]" system text — prefer attachment preview
   const bodyIsSystemText = msg.body && /^\[.+\]$/.test(msg.body.trim());
   const content = (!msg.body || bodyIsSystemText) ? attachPreview : msg.body;
 
+  const serializeAtt = (a: any, defaultType: string) => ({
+    type: a.attachmentType || defaultType,
+    url: a.url || null,
+    id: String(a.id),
+    ...(a.name ? { name: a.name } : {}),
+    ...(a.fileSize != null ? { fileSize: a.fileSize } : {}),
+    ...(a.mimeType ? { mimeType: a.mimeType } : {}),
+    ...(a.localPath ? { localPath: a.localPath } : {}),
+    // E2EE media download fields — cần preserve để StickerBubble biết sticker có thể download
+    ...(a.directPath ? { directPath: a.directPath } : {}),
+    ...(a.mediaKey ? { mediaKey: a.mediaKey } : {}),
+    ...(a.mediaSha256 ? { mediaSha256: a.mediaSha256 } : {}),
+    ...(a.mediaEncSha256 ? { mediaEncSha256: a.mediaEncSha256 } : {}),
+  });
+
   const attachments = msg.allAttachments && msg.allAttachments.length > 1
-    ? JSON.stringify(msg.allAttachments.map((a: any) => ({
-        type: a.attachmentType || 'image',
-        url: a.url || null,
-        id: String(a.id),
-        ...(a.name ? { name: a.name } : {}),
-        ...(a.fileSize != null ? { fileSize: a.fileSize } : {}),
-        ...(a.mimeType ? { mimeType: a.mimeType } : {}),
-      })))
-    : hasAttachment ? JSON.stringify([{
-        type: attachType || 'file',
-        url: msg.attachments.url || null,
-        id: String(msg.attachments.id),
-        ...(msg.attachments.name ? { name: msg.attachments.name } : {}),
-        ...(msg.attachments.fileSize != null ? { fileSize: msg.attachments.fileSize } : {}),
-        ...(msg.attachments.mimeType ? { mimeType: msg.attachments.mimeType } : {}),
-      }])
+    ? JSON.stringify(msg.allAttachments.map((a: any) => serializeAtt(a, 'image')))
+    : hasAttachment ? JSON.stringify([serializeAtt(msg.attachments, msgType)])
     : undefined;
 
+  // quote_data is provided by backend broadcast (already has original message content)
+  // or will be loaded from DB on reload (saveFBMessage now saves quote_data)
+  // Only set reply_to_id if quote_data is not already available
+  const hasQuoteData = !!msg.quote_data;
+  const hasReplyToId = !!msg.replyToMessageId && !msg.quote_data;
+  if (hasQuoteData) {
+    console.log(`[useChatEvents] normalizeFBMessage: msgId=${msg.messageID} HAS quote_data`);
+  } else if (hasReplyToId) {
+    console.log(`[useChatEvents] normalizeFBMessage: msgId=${msg.messageID} reply_to_id=${msg.replyToMessageId}`);
+  }
   return {
     msg_id: msg.messageID || String(Date.now()),
     owner_zalo_id: fbAccountId,
@@ -76,6 +101,8 @@ function normalizeFBMessage(fbAccountId: string, msg: any): MessageItem {
     status: 'received',
     channel: 'facebook',
     attachments,
+    ...(hasQuoteData ? { quote_data: msg.quote_data } : {}),
+    ...(hasReplyToId ? { reply_to_id: msg.replyToMessageId } : {}),
   };
 }
 
@@ -100,6 +127,11 @@ export function useChatEvents(): void {
       const threadId = message.replyToID;
       if (!threadId || threadId === '0') return;
 
+      // Log quote_data from backend for debugging
+      if (message.replyToMessageId || message.quote_data) {
+        console.log(`[useChatEvents] fb:onMessage reply: msgId=${message.messageID} replyToId=${message.replyToMessageId} quoteData=${message.quote_data ? 'YES' : 'NO'}`);
+      }
+
       const normalized = normalizeFBMessage(fbAccountId, message);
       const isSelf = !!message.isSelf || message.userID === fbAccountId;
       if (isSelf) {
@@ -110,6 +142,14 @@ export function useChatEvents(): void {
       const store = useChatStore.getState();
 
       // If self-echo from MQTT, replace the temp message instead of adding duplicate
+      // Build last message preview early (used by both temp-replacement and normal paths)
+      const lastMsgPreview = normalized.content?.slice(0, 100)
+        || (normalized.msg_type === 'image' || normalized.msg_type === 'photo' ? '🖼️ Hình ảnh'
+          : normalized.msg_type === 'video' ? '🎬 Video'
+          : normalized.msg_type === 'audio' ? '🎵 Audio'
+          : normalized.msg_type !== 'text' ? '📎 Tệp đính kèm'
+          : '[Tệp đính kèm]');
+
       if (isSelf) {
         const key = `${fbAccountId}_${threadId}`;
         const existing = store.messages[key] || [];
@@ -148,20 +188,71 @@ export function useChatEvents(): void {
           useChatStore.setState((s) => ({
             messages: { ...s.messages, [key]: updated },
           }));
+          // Update contact (last message preview + time) for conversation list
+          store.updateContact(fbAccountId, {
+            contact_id: threadId,
+            last_message: lastMsgPreview,
+            last_message_time: normalized.timestamp,
+            channel: 'facebook',
+          });
           return; // Don't add duplicate or increment unread
         }
       }
 
-      // Add message
+      // Log to detect echo overwrites
+      const afterKey = `${fbAccountId}_${threadId}`;
+      const afterExisting = useChatStore.getState().messages[afterKey] || [];
+      const afterDup = afterExisting.findIndex((m) => String(m.msg_id) === normalized.msg_id);
+      if (normalized.msg_type === 'sticker') {
+        console.log(`[useChatEvents] [STICKER] addMessage: msgId=${normalized.msg_id} threadId=${threadId} isSelf=${isSelf} content=${normalized.content} attachments=${(normalized.attachments || '').slice(0,200)}`);
+      }
+      console.log(`[useChatEvents] fb:onMessage addMessage: msgId=${normalized.msg_id} threadId=${threadId} isSelf=${isSelf} alreadyExists=${afterDup >= 0} localPathInAtts=${normalized.attachments?.includes('localPath')} localPathInPaths=${typeof normalized.local_paths === 'object' ? JSON.stringify(normalized.local_paths) : normalized.local_paths}`);
+
+      // Add message to store first
       store.addMessage(fbAccountId, threadId, normalized);
 
+      // If this message has reply_to_id but no quote_data, try looking up
+      // original message from the store (both should now be in the store)
+      const replyToMsgId = normalized.reply_to_id;
+      if (replyToMsgId && !normalized.quote_data) {
+        const storeAfter = useChatStore.getState();
+        const msgsAfter = storeAfter.messages[`${fbAccountId}_${threadId}`] || [];
+        const origMsg = msgsAfter.find((m: MessageItem) => m.msg_id === replyToMsgId);
+        if (origMsg?.content) {
+          const idx = msgsAfter.findIndex((m: MessageItem) => m.msg_id === normalized.msg_id);
+          if (idx >= 0) {
+            const updated = [...msgsAfter];
+            updated[idx] = {
+              ...updated[idx],
+              quote_data: JSON.stringify({ msgId: replyToMsgId, msg: origMsg.content, senderId: '', msgType: origMsg.msg_type || 'text' }),
+            };
+            storeAfter.setMessages(fbAccountId, threadId, updated);
+            console.log(`[useChatEvents] Updated quote_data from store for msgId=${normalized.msg_id}`);
+          }
+        } else {
+          // Fallback: try async DB lookup
+          (async () => {
+            try {
+              const dbRes = await ipc.db?.getMessageById?.({ zaloId: fbAccountId, msgId: replyToMsgId });
+              const dbMsg = dbRes?.message;
+              if (dbMsg?.content) {
+                const st = useChatStore.getState();
+                const k = `${fbAccountId}_${threadId}`;
+                const mList = st.messages[k] || [];
+                const i = mList.findIndex((m: MessageItem) => m.msg_id === normalized.msg_id);
+                if (i >= 0) {
+                  const upd = [...mList];
+                  upd[i] = { ...upd[i], quote_data: JSON.stringify({ msgId: replyToMsgId, msg: dbMsg.content, senderId: '', msgType: dbMsg.msg_type || 'text' }) };
+                  st.setMessages(fbAccountId, threadId, upd);
+                  console.log(`[useChatEvents] Updated quote_data from DB for msgId=${normalized.msg_id}`);
+                }
+              }
+            } catch {}
+          })();
+        }
+      }
+
       // Update contact (last message preview + time)
-      const lastMsgPreview = normalized.content?.slice(0, 100)
-        || (normalized.msg_type === 'image' || normalized.msg_type === 'photo' ? '🖼️ Hình ảnh'
-          : normalized.msg_type === 'video' ? '🎬 Video'
-          : normalized.msg_type === 'audio' ? '🎵 Audio'
-          : normalized.msg_type !== 'text' ? '📎 Tệp đính kèm'
-          : '[Tệp đính kèm]');
       store.updateContact(fbAccountId, {
         contact_id: threadId,
         last_message: lastMsgPreview,
@@ -177,36 +268,68 @@ export function useChatEvents(): void {
     });
     if (unsubMsg) unsubscribers.push(unsubMsg);
 
+    // ─── fb:onContactUpdate → cập nhật tên/avatar cho 1-1 Facebook ──────────────
+    const unsubContact = ipc.on?.('fb:onContactUpdate', (data: {
+      fbAccountId: string;
+      contactId: string;
+      name: string;
+      avatarUrl: string;
+    }) => {
+      if (!data?.fbAccountId || !data?.contactId) return;
+      const patch: any = { contact_id: data.contactId, channel: 'facebook' };
+      if (data.name) patch.display_name = data.name;
+      if (data.avatarUrl) patch.avatar_url = data.avatarUrl;
+      useChatStore.getState().updateContact(data.fbAccountId, patch);
+    });
+    if (unsubContact) unsubscribers.push(unsubContact);
+
     // ─── fb:onConnectionStatus → accountStore ─────────────────────────────
     const unsubStatus = ipc.on?.('fb:onConnectionStatus', (data: {
       fbAccountId: string;
       status: string;
     }) => {
       if (!data?.fbAccountId) return;
-      const isConnected = data.status === 'connected';
-      const isCookieExpired = data.status === 'cookie_expired';
-      useAccountStore.getState().updateAccountStatus(data.fbAccountId, isConnected, isConnected);
+      const { updateAccountStatus, updateListenerActive } = useAccountStore.getState();
 
-      // Notify user when cookie expired / bot detected
-      if (isCookieExpired) {
-        const accounts = useAccountStore.getState().accounts;
-        const acc = accounts.find((a: any) => a.zalo_id === data.fbAccountId || a.facebook_id === data.fbAccountId);
-        const name = acc?.full_name || acc?.zalo_id || data.fbAccountId;
-        useAppStore.getState().showNotification(
-          `⚠️ Tài khoản Facebook "${name}" bị ngắt kết nối (FB phát hiện bot hoặc cookie hết hạn). Vui lòng đăng nhập lại FB để lấy cookie mới.`,
-          'error'
-        );
-      }
+      switch (data.status) {
+        case 'connected':
+          updateAccountStatus(data.fbAccountId, true, true);
+          updateListenerActive(data.fbAccountId, true);
+          // Reload contacts from DB after FB connects
+          ipc.db?.getContacts(data.fbAccountId)
+            .then((res: any) => {
+              if (res?.contacts) {
+                useChatStore.getState().setContacts(data.fbAccountId, res.contacts);
+              }
+            })
+            .catch(() => {});
+          break;
 
-      // Reload contacts from DB after FB connects (threads with names were just saved)
-      if (isConnected) {
-        ipc.db?.getContacts(data.fbAccountId)
-          .then((res: any) => {
-            if (res?.contacts) {
-              useChatStore.getState().setContacts(data.fbAccountId, res.contacts);
-            }
-          })
-          .catch(() => {});
+        case 'connecting':
+          // isOnline=false, isConnected=true → badge hiển thị "Đang kết nối"
+          updateAccountStatus(data.fbAccountId, false, true);
+          break;
+
+        case 'cookie_expired':
+          // MQTT max retries (8 lần) → đánh dấu listener chết
+          updateAccountStatus(data.fbAccountId, false, false);
+          updateListenerActive(data.fbAccountId, false);
+          // Thông báo user
+          {
+            const accounts = useAccountStore.getState().accounts;
+            const acc = accounts.find((a: any) => a.zalo_id === data.fbAccountId || a.facebook_id === data.fbAccountId);
+            const name = acc?.full_name || acc?.zalo_id || data.fbAccountId;
+            useAppStore.getState().showNotification(
+              `⚠️ Tài khoản Facebook "${name}" bị ngắt kết nối (FB phát hiện bot hoặc cookie hết hạn). Vui lòng đăng nhập lại FB để lấy cookie mới.`,
+              'error'
+            );
+          }
+          break;
+
+        case 'error':
+        case 'disconnected':
+          updateAccountStatus(data.fbAccountId, false, false);
+          break;
       }
     });
     if (unsubStatus) unsubscribers.push(unsubStatus);
@@ -254,6 +377,88 @@ export function useChatEvents(): void {
       }
     });
     if (unsubTyping) unsubscribers.push(unsubTyping);
+
+    // ─── fb:onSeen → chatStore seen status (C8) ────────────────────────────
+    const unsubSeen = ipc.on?.('fb:onSeen', (data: {
+      fbAccountId: string;
+      threadId: string;
+      userId: string;
+      timestamp: number;
+    }) => {
+      if (!data?.fbAccountId || !data?.threadId) return;
+      useChatStore.getState().setSeen(data.fbAccountId, data.threadId, [data.userId], '0', false);
+    });
+    if (unsubSeen) unsubscribers.push(unsubSeen);
+
+    // ─── fb:onE2EEStatus → account status update ──────────────────────────
+    const unsubE2EEStatus = ipc.on?.('fb:onE2EEStatus', (data: {
+      fbAccountId: string;
+      status: string;
+    }) => {
+      if (!data?.fbAccountId) return;
+      const isConnected = data.status === 'connected';
+      if (isConnected) {
+        console.log(`[useChatEvents] E2EE connected for ${data.fbAccountId}`);
+      } else if (data.status === 'error') {
+        console.warn(`[useChatEvents] E2EE error for ${data.fbAccountId}`);
+      }
+    });
+    if (unsubE2EEStatus) unsubscribers.push(unsubE2EEStatus);
+
+    // ─── fb:onThreadInfoUpdate → update contact display name / emoji (I4) ──
+    const unsubThreadInfo = ipc.on?.('fb:onThreadInfoUpdate', (data: {
+      fbAccountId: string;
+      threadId: string;
+      type: 'name' | 'emoji';
+      name?: string;
+      emoji?: string;
+    }) => {
+      if (!data?.fbAccountId || !data?.threadId) return;
+      const update: any = { contact_id: data.threadId, channel: 'facebook' };
+      if (data.type === 'name' && data.name) {
+        update.display_name = data.name;
+      } else if (data.type === 'emoji' && data.emoji) {
+        update.fb_emoji = data.emoji;
+      }
+      useChatStore.getState().updateContact(data.fbAccountId, update);
+    });
+    if (unsubThreadInfo) unsubscribers.push(unsubThreadInfo);
+
+    // ─── fb:onGroupEvent → participant changes (I4) ────────────────────────
+    const unsubGroupEvent = ipc.on?.('fb:onGroupEvent', (data: {
+      fbAccountId: string;
+      threadId: string;
+      type: string;
+      participantId?: string;
+      actorFbId?: string;
+    }) => {
+      if (!data?.fbAccountId || !data?.threadId) return;
+      // Refresh contacts list so participant count gets synced
+      ipc.fb?.getThreads({ accountId: data.fbAccountId, forceRefresh: false })
+        .catch(() => {});
+    });
+    if (unsubGroupEvent) unsubscribers.push(unsubGroupEvent);
+
+    // ─── event:localPath → cập nhật local_paths cho FB message sau khi download ──
+    const unsubLocalPath = ipc.on?.('event:localPath', (data: {
+      zaloId: string;
+      msgId: string;
+      threadId: string;
+      localPaths: Record<string, string>;
+    }) => {
+      if (!data?.zaloId || !data?.msgId || !data?.threadId || !data?.localPaths) return;
+      const store = useChatStore.getState();
+      const key = `${data.zaloId}_${data.threadId}`;
+      const msgs = store.messages[key] || [];
+      const found = msgs.find(m => String(m.msg_id) === String(data.msgId));
+      console.log(`[useChatEvents] event:localPath zaloId=${data.zaloId} msgId=${data.msgId} threadId=${data.threadId} key=${key} found=${!!found} localPaths=${JSON.stringify(data.localPaths)}`);
+      if (found) {
+        store.updateMessageLocalPath(data.zaloId, data.threadId, data.msgId, data.localPaths);
+      } else {
+        console.warn(`[useChatEvents] event:localPath message NOT FOUND in store! key=${key} msgId=${data.msgId}`);
+      }
+    });
+    if (unsubLocalPath) unsubscribers.push(unsubLocalPath);
 
     return () => {
       unsubscribers.forEach((fn) => fn());

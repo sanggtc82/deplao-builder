@@ -160,7 +160,7 @@ function QuickMsgPicker({ getAuth, accountId, onSelect, onClose }: {
   return (
     <div ref={ref}
       className="absolute bottom-full left-0 mb-2 bg-gray-800 border border-gray-600 rounded-xl shadow-2xl z-[200] w-72 flex flex-col overflow-hidden"
-      style={{ maxHeight: 260 }}
+      style={{ maxHeight: '16.25rem' }}
       onClick={e => e.stopPropagation()}>
       <div className="px-3 pt-2.5 pb-2 border-b border-gray-700 flex-shrink-0">
         <p className="text-[11px] text-yellow-400 font-semibold uppercase tracking-wide mb-1.5 flex items-center gap-1">
@@ -571,7 +571,7 @@ export default function QuickChatModal() {
       onClick={closeQuickChat}>
       <div
         className="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl flex flex-col overflow-visible"
-        style={{ width: 620, height: 680, maxWidth: '95vw', maxHeight: '92vh' }}
+        style={{ width: '38.75rem', height: '42.5rem', maxWidth: '95vw', maxHeight: '92vh' }}
         onClick={e => e.stopPropagation()}
       >
         {/* ── Header ──────────────────────────────────────────────────── */}

@@ -451,7 +451,7 @@ export default function AIQuickPanel({ onClose }: { onClose: () => void }) {
               placeholder="Nhập câu hỏi..."
               rows={1}
               className="flex-1 bg-transparent text-sm text-white placeholder-gray-500 resize-none outline-none max-h-24 overflow-y-auto"
-              style={{ minHeight: '24px' }}
+              style={{ minHeight: '1.5rem' }}
             />
             <button onClick={handleSend} disabled={loading || !input.trim()}
               className="w-7 h-7 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 flex items-center justify-center text-white transition-colors flex-shrink-0">

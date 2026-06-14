@@ -8,7 +8,7 @@ interface Props { onClose?: () => void; }
 export default function NotificationCenter({ onClose }: Props) {
   const eid = useCurrentEmployeeId();
   const erpPerms = useErpPermissions();
-  const { inbox, loadInbox, markRead, markAllRead } = useErpNotificationStore();
+  const { inbox, loadInbox, markRead, markAllRead, deleteNotifications, deleteAllNotifications } = useErpNotificationStore();
   const { status, updateInfo, progress, platform, dismissed, postpone } = useUpdateStore();
   const isMac = platform === 'darwin';
   const hasUpdate = !!updateInfo && !dismissed;
@@ -55,11 +55,18 @@ export default function NotificationCenter({ onClose }: Props) {
         <span className="text-sm font-semibold text-white">Thông báo</span>
         <div className="flex items-center gap-2">
           {hasErpNotifs && (
-            <button
-              onClick={() => markAllRead(eid)}
-              className="text-[11px] text-gray-400 hover:text-white"
-              title="Đánh dấu tất cả đã đọc"
-            >Đọc hết</button>
+            <>
+              <button
+                onClick={() => markAllRead(eid)}
+                className="text-[11px] text-gray-400 hover:text-white"
+                title="Đánh dấu tất cả đã đọc"
+              >Đọc hết</button>
+              <button
+                onClick={() => deleteAllNotifications(eid)}
+                className="text-[11px] text-gray-400 hover:text-red-400"
+                title="Xoá tất cả thông báo"
+              >Xoá hết</button>
+            </>
           )}
           {onClose && (
             <button onClick={onClose} className="text-gray-400 hover:text-white text-xs" title="Đóng">✕</button>
@@ -161,7 +168,7 @@ export default function NotificationCenter({ onClose }: Props) {
                   <button
                     key={n.id}
                     onClick={() => !n.read && markRead([n.id])}
-                    className={`w-full text-left px-3 py-2 border-b border-gray-700/40 hover:bg-gray-700/60 flex items-start gap-2 ${n.read ? 'opacity-60' : ''}`}
+                    className={`w-full text-left px-3 py-2 border-b border-gray-700/40 hover:bg-gray-700/60 flex items-start gap-2 group ${n.read ? 'opacity-60' : ''}`}
                   >
                     {!n.read && <span className="mt-1 w-1.5 h-1.5 bg-blue-400 rounded-full flex-shrink-0" />}
                     {n.read && <span className="mt-1 w-1.5 h-1.5 flex-shrink-0" />}
@@ -169,6 +176,28 @@ export default function NotificationCenter({ onClose }: Props) {
                       <div className="text-xs text-gray-200 font-medium truncate">{n.title}</div>
                       {n.body && <div className="text-[11px] text-gray-400 truncate">{n.body}</div>}
                       <div className="text-[10px] text-gray-500 mt-0.5">{formatTime(n.created_at)}</div>
+                    </div>
+                    <div className="flex items-center gap-0.5 flex-shrink-0">
+                      {!n.read && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); markRead([n.id]); }}
+                          className="w-5 h-5 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-blue-500/20 text-gray-500 hover:text-blue-400 transition-all"
+                          title="Đánh dấu đã đọc"
+                        >
+                          <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12"/>
+                          </svg>
+                        </button>
+                      )}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteNotifications([n.id]); }}
+                        className="w-5 h-5 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-500/20 text-gray-500 hover:text-red-400 transition-all"
+                        title="Xoá thông báo này"
+                      >
+                        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                      </button>
                     </div>
                   </button>
                 ))}

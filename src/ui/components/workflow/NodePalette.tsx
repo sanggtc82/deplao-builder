@@ -3,6 +3,7 @@ import { NODE_GROUPS } from './workflowConfig';
 
 const GROUP_ACCENT: Record<string, string> = {
   'Kích hoạt':             'bg-violet-500',
+  'Hành động':             'bg-blue-600',
   'Thao tác':              'bg-blue-500',
   'Điều kiện & Logic':     'bg-amber-500',
   'Xử lý dữ liệu':        'bg-teal-500',
@@ -13,6 +14,7 @@ const GROUP_ACCENT: Record<string, string> = {
 };
 const GROUP_HOVER: Record<string, string> = {
   'Kích hoạt':             'hover:border-violet-500/50 hover:bg-violet-500/5',
+  'Hành động':             'hover:border-blue-600/50 hover:bg-blue-600/5',
   'Thao tác':              'hover:border-blue-500/50 hover:bg-blue-500/5',
   'Điều kiện & Logic':     'hover:border-amber-500/50 hover:bg-amber-500/5',
   'Xử lý dữ liệu':        'hover:border-teal-500/50 hover:bg-teal-500/5',
@@ -22,7 +24,11 @@ const GROUP_HOVER: Record<string, string> = {
   'Đầu ra & API':          'hover:border-rose-500/50 hover:bg-rose-500/5',
 };
 
-export default function NodePalette() {
+interface Props {
+  channel?: 'zalo' | 'facebook';
+}
+
+export default function NodePalette({ channel }: Props) {
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
@@ -31,12 +37,20 @@ export default function NodePalette() {
     e.dataTransfer.effectAllowed = 'copy';
   };
 
+  /** Filter node items by channel: show items without channel restriction, or matching the current workflow channel */
+  const channelFilter = (item: { channel?: string }) => {
+    if (!channel) return true;
+    if (!item.channel || item.channel === 'both') return true;
+    return item.channel === channel;
+  };
+
   const filtered = NODE_GROUPS.map(g => ({
     ...g,
     items: g.items.filter(n =>
-      !search ||
-      n.label.toLowerCase().includes(search.toLowerCase()) ||
-      n.type.toLowerCase().includes(search.toLowerCase())
+      channelFilter(n) &&
+      (!search ||
+        n.label.toLowerCase().includes(search.toLowerCase()) ||
+        n.type.toLowerCase().includes(search.toLowerCase()))
     ),
   })).filter(g => g.items.length > 0);
 

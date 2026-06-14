@@ -7,28 +7,40 @@ import { useAppStore } from '@/store/appStore';
 interface WorkflowAIDialogProps {
   currentNodes: any[];
   currentEdges: any[];
+  channel: 'zalo' | 'facebook';
   onApply: (nodes: any[], edges: any[]) => void;
   onClose: () => void;
 }
 
+// ── Filter nodes by channel (same logic as NodePalette) ───────────────────────
+function channelFilter(item: { channel?: string }, channel: string): boolean {
+  if (!item.channel || item.channel === 'both') return true;
+  return item.channel === channel;
+}
+
 // ── Build concise catalog of all node types for the AI system prompt ──────────
-function buildNodeCatalog(): string {
+function buildNodeCatalog(channel: string): string {
   return NODE_GROUPS.map(g => {
-    const items = g.items.map(it => {
-      const cfgKeys = Object.keys(DEFAULT_CONFIGS[it.type] || {});
-      return `  - type: "${it.type}"  |  label: "${it.label}"  |  desc: "${it.desc}"${cfgKeys.length ? `  |  config keys: [${cfgKeys.join(', ')}]` : ''}`;
-    }).join('\n');
-    return `## ${g.label}\n${items}`;
-  }).join('\n\n');
+    const items = g.items
+      .filter(it => channelFilter(it, channel))
+      .map(it => {
+        const cfgKeys = Object.keys(DEFAULT_CONFIGS[it.type] || {});
+        return `  - type: "${it.type}"  |  label: "${it.label}"  |  desc: "${it.desc}"${cfgKeys.length ? `  |  config keys: [${cfgKeys.join(', ')}]` : ''}`;
+      });
+    if (items.length === 0) return null;
+    return `## ${g.label}\n${items.join('\n')}`;
+  }).filter(Boolean).join('\n\n');
 }
 
 // ── Build the system message ──────────────────────────────────────────────────
-function buildSystemPrompt(currentNodes: any[], currentEdges: any[]): string {
-  const catalog = buildNodeCatalog();
+function buildSystemPrompt(currentNodes: any[], currentEdges: any[], channel: string): string {
+  const catalog = buildNodeCatalog(channel);
   const currentWf = JSON.stringify({ nodes: currentNodes, edges: currentEdges }, null, 2);
+  const channelName = channel === 'facebook' ? 'Facebook Messenger' : 'Zalo';
 
-  return `Bạn là trợ lý AI chuyên xây dựng Workflow tự động cho phần mềm Deplao (quản lý Zalo).
+  return `Bạn là trợ lý AI chuyên xây dựng Workflow tự động cho phần mềm Deplao (quản lý ${channelName}).
 Nhiệm vụ: Dựa trên yêu cầu của người dùng, trả về JSON chứa danh sách nodes và edges cần THÊM vào workflow hiện tại.
+Kênh hiện tại: ${channelName} — CHỈ được dùng các node thuộc kênh ${channelName} từ danh mục bên dưới.
 
 ## QUY TẮC QUAN TRỌNG:
 1. Chỉ trả về JSON hợp lệ, KHÔNG giải thích, KHÔNG markdown code fence.
@@ -57,13 +69,13 @@ Nhiệm vụ: Dựa trên yêu cầu của người dùng, trả về JSON chứ
 6. Position: bắt đầu từ x=300, y=100, mỗi node cách nhau ~150px theo chiều dọc (y).
 7. Nếu workflow hiện tại đã có nodes, đặt các node mới phía bên phải (x offset +400 so với node xa nhất).
 
-## DANH MỤC NODE CÓ SẴN:
+## DANH MỤC NODE CÓ SẴN (chỉ dành cho kênh ${channelName}):
 ${catalog}
 
 ## WORKFLOW HIỆN TẠI (đã có trên canvas):
 ${currentWf.length > 8000 ? currentWf.substring(0, 8000) + '\n... (truncated)' : currentWf}
 
-Hãy trả về JSON nodes & edges cần THÊM VÀO workflow.`;
+Hãy trả về JSON nodes & edges cần THÊM VÀO workflow (chỉ dùng node trong danh mục dành cho kênh ${channelName}).`;
 }
 
 // ── Extract JSON from AI response (handle markdown fences, etc.) ─────────────
@@ -93,7 +105,7 @@ function extractJSON(text: string): any {
   return null;
 }
 
-export default function WorkflowAIDialog({ currentNodes, currentEdges, onApply, onClose }: WorkflowAIDialogProps) {
+export default function WorkflowAIDialog({ currentNodes, currentEdges, channel, onApply, onClose }: WorkflowAIDialogProps) {
   const { showNotification, theme } = useAppStore();
   const isLight = theme === 'light';
   const [prompt, setPrompt] = useState('');
@@ -135,7 +147,7 @@ export default function WorkflowAIDialog({ currentNodes, currentEdges, onApply, 
     setPreview(null);
 
     try {
-      const systemPrompt = buildSystemPrompt(currentNodes, currentEdges);
+      const systemPrompt = buildSystemPrompt(currentNodes, currentEdges, channel);
       const messages = [
         { role: 'system', content: systemPrompt },
         // Include conversation history for multi-turn

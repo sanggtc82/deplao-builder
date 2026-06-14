@@ -10,6 +10,7 @@ import MediaSection, { MediaDetailPanel, MediaTab } from './MediaSection';
 import { UserActionSection } from './ConversationActions';
 import { extractUserProfile } from '../../../utils/profileUtils';
 import GroupAvatar from '../common/GroupAvatar';
+import { toLocalMediaUrl } from '@/lib/localMedia';
 import { getCapability, type Channel } from '../../../configs/channelConfig';
 
 function muteUntilToDuration(until: number): number | string {
@@ -124,8 +125,8 @@ function UserConversationInfo() {
     setLoading(true);
     try {
       await loadPinStatus();
-      // Also fetch fresh user profile (avatar, name, phone)
-      if (activeAccountId && activeThreadId) {
+      // Zalo-only: fetch fresh user profile (avatar, name, phone) via API
+      if (activeAccountId && activeThreadId && channelCap.supportsAlias) {
         const auth = getAuth();
         if (auth) {
           try {
@@ -413,7 +414,7 @@ function UserConversationInfo() {
       {/* Avatar + name */}
       <div className="flex flex-col items-center py-6 px-4 border-b border-gray-700">
         {avatarUrl ? (
-          <img src={avatarUrl} alt={displayName} className="w-16 h-16 rounded-full object-cover mb-3" />
+          <img src={toLocalMediaUrl(avatarUrl)} alt={displayName} className="w-16 h-16 rounded-full object-cover mb-3" />
         ) : (
           <div className="w-16 h-16 rounded-full flex items-center justify-center text-white text-2xl font-bold mb-3 bg-blue-600">
             {(displayName || 'U').charAt(0).toUpperCase()}

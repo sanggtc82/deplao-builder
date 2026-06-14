@@ -38,6 +38,7 @@ export interface MessageItem {
   recalled_content?: string | null; // Nội dung gốc trước khi thu hồi
   reactions?: ReactionData | Record<string, string> | string;
   quote_data?: string;
+  reply_to_id?: string | null;
   handled_by_employee?: string | null;  // employee_id of employee who sent/handled this message
   /** Kênh chat: 'zalo' | 'facebook'. Default 'zalo' cho backward compat */
   channel?: Channel;
@@ -533,19 +534,27 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   updateMessageLocalPath: (zaloId, threadId, msgId, localPaths) => {
     const key = `${zaloId}_${threadId}`;
     const msgIdStr = String(msgId);
-    set((state) => ({
-      messages: {
-        ...state.messages,
-        [key]: (state.messages[key] || []).map((m) => {
-          if (String(m.msg_id) !== msgIdStr) return m;
-          let existing: Record<string, string> = {};
-          if (typeof m.local_paths === 'string') {
-            try { existing = JSON.parse(m.local_paths || '{}'); } catch {}
-          }
-          return { ...m, local_paths: JSON.stringify({ ...existing, ...localPaths }) };
-        }),
-      },
-    }));
+    set((state) => {
+      const msgs = state.messages[key] || [];
+      const foundIdx = msgs.findIndex(m => String(m.msg_id) === msgIdStr);
+      if (foundIdx < 0) {
+        console.warn(`[chatStore] updateMessageLocalPath: message NOT FOUND key=${key} msgId=${msgIdStr} msgsLen=${msgs.length}`);
+        return state;
+      }
+      return {
+        messages: {
+          ...state.messages,
+          [key]: msgs.map((m) => {
+            if (String(m.msg_id) !== msgIdStr) return m;
+            let existing: Record<string, string> = {};
+            if (typeof m.local_paths === 'string') {
+              try { existing = JSON.parse(m.local_paths || '{}'); } catch {}
+            }
+            return { ...m, local_paths: JSON.stringify({ ...existing, ...localPaths }) };
+          }),
+        },
+      };
+    });
   },
 
   updateLocalPaths: (zaloId, threadId, msgId, localPaths) => {

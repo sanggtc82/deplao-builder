@@ -233,7 +233,12 @@ export default function TargetSelector({ zaloId, allLabels, localLabels, localLa
           // Not resolved yet — will be resolved when adding
           return { contact_id: `phone:${phone}`, display_name: phone, avatar: '', phone, source: 'phone_pending' };
         })
-        .filter(c => !existingContactIds.has(c.contact_id));
+        .filter(c => {
+          // Check both contact_id and phone: prefix to prevent duplicates
+          if (existingContactIds.has(c.contact_id)) return false;
+          if (c.phone && existingContactIds.has(`phone:${c.phone}`)) return false;
+          return true;
+        });
     }
     if (mode === 'by_uid') {
       return uidList
@@ -250,7 +255,10 @@ export default function TargetSelector({ zaloId, allLabels, localLabels, localLa
           // Not resolved locally — will be resolved at send time via getUserInfo
           return { contact_id: uid, display_name: '', avatar: '', source: 'uid_pending' };
         })
-        .filter(c => !existingContactIds.has(c.contact_id));
+        .filter(c => {
+          if (existingContactIds.has(c.contact_id)) return false;
+          return true;
+        });
     }
     if (mode === 'manual') return available.filter(c => manualSelected.has(c.contact_id));
     return filtered;
@@ -286,9 +294,18 @@ export default function TargetSelector({ zaloId, allLabels, localLabels, localLa
         // Not resolved — add as pending phone, will be resolved at send time
         return { contact_id: `phone:${phone}`, display_name: phone, avatar: '', phone };
       })
-      .filter(c => !existingContactIds.has(c.contact_id));
+      .filter(c => {
+        // Check both contact_id and phone: prefix to prevent duplicates
+        // when resolution status changes between sessions
+        if (existingContactIds.has(c.contact_id)) return false;
+        if (c.phone && existingContactIds.has(`phone:${c.phone}`)) return false;
+        return true;
+      });
     if (contacts.length > 0) {
       onConfirm(contacts);
+      onClose();
+    } else if (phoneList.length > 0) {
+      // All phones already exist in campaign — close modal
       onClose();
     }
   };
@@ -314,6 +331,9 @@ export default function TargetSelector({ zaloId, allLabels, localLabels, localLa
       .filter(c => !existingContactIds.has(c.contact_id));
     if (contacts.length > 0) {
       onConfirm(contacts);
+      onClose();
+    } else if (uidList.length > 0) {
+      // All UIDs already exist in campaign — close modal
       onClose();
     }
   };
@@ -475,7 +495,9 @@ export default function TargetSelector({ zaloId, allLabels, localLabels, localLa
                   ) : (
                     phoneList.map((phone, i) => {
                       const resolved = phoneResolved.get(phone);
-                      const existing = existingContactIds.has(resolved?.uid || '');
+                      // Check both resolved UID and phone: prefix for previously added unresolved phones
+                      const phoneContactId = `phone:${phone}`;
+                      const existing = existingContactIds.has(resolved?.uid || '') || existingContactIds.has(phoneContactId);
                       return (
                         <div key={phone} className={`flex items-center gap-2 px-3 py-2 border-b border-gray-700/30 ${existing ? 'opacity-40' : ''}`}>
                           <span className="text-[11px] text-gray-600 w-5 text-right flex-shrink-0">{i + 1}</span>

@@ -62,6 +62,16 @@ export default class ErpNotificationService {
     this.db().run(`UPDATE erp_notifications SET read = 1 WHERE recipient_id = ?`, [recipientId]);
   }
 
+  delete(ids: number[]): void {
+    if (!ids.length) return;
+    const placeholders = ids.map(() => '?').join(',');
+    this.db().run(`DELETE FROM erp_notifications WHERE id IN (${placeholders})`, ids);
+  }
+
+  deleteAll(recipientId: string): void {
+    this.db().run(`DELETE FROM erp_notifications WHERE recipient_id = ?`, [recipientId]);
+  }
+
   getUnreadCount(recipientId: string): number {
     const row = this.db().queryOne<any>(
       `SELECT COUNT(*) as cnt FROM erp_notifications WHERE recipient_id = ? AND read = 0`,

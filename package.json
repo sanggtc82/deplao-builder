@@ -1,18 +1,20 @@
 {
   "name": "Deplao",
-  "version": "26.4.8",
-  "description": "Phần mềm desktop quản lý Zalo Đa tài khoản tích hợp CRM, ERP, POS, Workflow và AI Assistant giúp đội nhóm bán hàng, chăm sóc khách hàng và marketing trên Zalo vận hành tập trung trong một ứng dụng duy nhất.",
+  "version": "26.6.0",
+  "description": "Phần mềm desktop quản lý Zalo & Facebook cá nhân Đa tài khoản tích hợp CRM, ERP, POS, Workflow và AI Assistant giúp đội nhóm bán hàng, chăm sóc khách hàng và marketing trên Zalo vận hành tập trung trong một ứng dụng duy nhất.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "postinstall": "node scripts/patch-electron-icon.js",
     "patch-icon": "node scripts/patch-electron-icon.js",
+    "build:bridge-e2ee": "cd bridge-e2ee && go build -ldflags=\"-s -w\" -o build/fbchat-bridge-e2ee.exe .",
+    "predev": "npm run build:bridge-e2ee || echo 'WARN: E2EE bridge build failed, app will work without E2EE'",
     "dev": "npm run build:electron && concurrently -n VITE,TSC,ELECTRON -c cyan,magenta,yellow \"vite\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on http://localhost:5713 && cross-env NODE_ENV=development electron dist-electron/electron/main.js\"",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:renderer": "vite build",
     "production": "tsc -p tsconfig.electron.prod.json && node scripts/strip-console.js && npm run build:renderer && electron-builder --publish never"
   },
   "author": "https://github.com/babyvibe",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "axios": "^1.7.8",
     "axios-cookiejar-support": "^5.0.3",
@@ -43,6 +45,7 @@
     "socks-proxy-agent": "^10.0.0",
     "tough-cookie": "^5.0.0",
     "uuid": "^13.0.0",
+    "xlsx": "^0.18.5",
     "zca-js": "^2.1.2"
   },
   "devDependencies": {
@@ -87,6 +90,15 @@
     "appId": "com.Deplao.app",
     "productName": "Deplao",
     "forceCodeSigning": false,
+    "extraResources": [
+      {
+        "from": "bridge-e2ee/build/",
+        "to": "fbchat-bridge-e2ee.exe",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "directories": {
       "output": "dist-electron-build"
     },
@@ -123,11 +135,16 @@
       "icon": "resources/icons/icon.ico",
       "signAndEditExecutable": false
     },
+    "protocols": {
+      "name": "Deplao Deep Link",
+      "schemes": ["deplao"]
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "allowElevation": true,
-      "artifactName": "${productName}-Setup-${version}.${ext}"
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "perMachine": false
     },
     "mac": {
       "target": [

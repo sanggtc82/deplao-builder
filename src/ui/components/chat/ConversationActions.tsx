@@ -21,6 +21,7 @@ import ipc from '@/lib/ipc';
 import { showConfirm } from '../common/ConfirmDialog';
 import { extractApiError } from '@/utils/apiError';
 import type { ChannelCapability } from '../../../configs/channelConfig';
+import * as channelIpc from '@/lib/channelIpc';
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
 function useAuth() {
@@ -240,10 +241,12 @@ export function LeaveGroupAction({ groupId, groupName, onLeft }: LeaveGroupActio
 interface BlockUserActionProps {
   userId: string;
   userName: string;
+  channel: ChannelCapability['id'];
 }
 
-export function BlockUserAction({ userId, userName }: BlockUserActionProps) {
+export function BlockUserAction({ userId, userName, channel }: BlockUserActionProps) {
   const getAuth = useAuth();
+  const { activeAccountId } = useAccountStore();
   const { showNotification } = useAppStore();
   const [isBlocked, setIsBlocked] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -256,18 +259,21 @@ export function BlockUserAction({ userId, userName }: BlockUserActionProps) {
       variant: 'warning',
     }) : true;
     if (!ok) return;
-    const auth = getAuth();
-    if (!auth) return;
+    if (!activeAccountId) return;
     setLoading(true);
     try {
       if (isBlocked) {
-        await ipc.zalo?.unblockUser({ auth, userId });
-        setIsBlocked(false);
-        showNotification(`Đã bỏ chặn ${userName}`, 'success');
+        const res = await channelIpc.unblockUser(channel, { accountId: activeAccountId, userId });
+        if (res.success !== false) {
+          setIsBlocked(false);
+          showNotification(`Đã bỏ chặn ${userName}`, 'success');
+        } else showNotification(extractApiError(res, 'Bỏ chặn thất bại'), 'error');
       } else {
-        await ipc.zalo?.blockUser({ auth, userId });
-        setIsBlocked(true);
-        showNotification(`Đã chặn ${userName}`, 'success');
+        const res = await channelIpc.blockUser(channel, { accountId: activeAccountId, userId });
+        if (res.success !== false) {
+          setIsBlocked(true);
+          showNotification(`Đã chặn ${userName}`, 'success');
+        } else showNotification(extractApiError(res, 'Chặn thất bại'), 'error');
       }
     } catch (e: any) {
       showNotification(extractApiError(e, 'Thao tác thất bại'), 'error');
@@ -424,7 +430,7 @@ interface GroupActionSectionProps {
 
 export function GroupActionSection({ groupId, groupName, isOwner, onLeft, channelCap }: GroupActionSectionProps) {
   const supportsReport = channelCap ? channelCap.supportsReport : true;
-  const supportsLeave = !channelCap || channelCap.id === 'zalo';
+  const supportsLeave = channelCap ? channelCap.supportsLeaveGroup : true;
   return (
     <div className="border-t border-gray-700">
       {supportsReport && <ReportAction targetId={groupId} targetName={groupName} targetType="group" />}
@@ -459,7 +465,7 @@ export function UserActionSection({
   return (
     <div className="border-t border-gray-700">
       {supportsMutualGroups && <MutualGroupsRow userId={userId} onOpen={onMutualGroupsOpen} />}
-      {supportsBlock && <BlockUserAction userId={userId} userName={userName} />}
+      {supportsBlock && <BlockUserAction userId={userId} userName={userName} channel={channelCap?.id || 'zalo'} />}
       {supportsReport && <ReportAction targetId={userId} targetName={userName} targetType="user" />}
       <DeleteHistoryAction threadId={userId} />
       {supportsRemoveFriend && isFriend && (

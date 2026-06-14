@@ -14,11 +14,13 @@ class FacebookConnectionManager {
    * Lấy hoặc tạo FacebookService instance
    * Nếu đã có instance với accountId này → trả về instance cũ
    */
-  public static getOrCreate(accountId: string, cookie: string): FacebookService {
+  public static async getOrCreate(accountId: string, cookie: string, proxyId?: number | null): Promise<FacebookService> {
     if (this.connections.has(accountId)) {
-      return this.connections.get(accountId)!;
+      const existing = this.connections.get(accountId)!;
+      if (proxyId !== undefined) existing.setProxy(proxyId);
+      return existing;
     }
-    const service = FacebookService.getInstance(accountId, cookie);
+    const service = await FacebookService.getInstance(accountId, cookie, proxyId);
     this.connections.set(accountId, service);
     return service;
   }

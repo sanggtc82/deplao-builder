@@ -107,6 +107,8 @@ interface AppStore {
 
   theme: AppTheme;
   setTheme: (theme: AppTheme) => void;
+  fontSizeScale: number;
+  setFontSizeScale: (scale: number) => void;
 
   setView: (view: AppView) => void;
   setLoading: (loading: boolean) => void;
@@ -200,6 +202,23 @@ interface AppStore {
   hasCRMRequestUnseen: (zaloId: string) => boolean;
   hasAnyCRMRequestUnseen: () => boolean;
 }
+
+// ─── fontSizeScale persists in localStorage ─────────────────────────────────
+// Scale range: 0.75 (12px) → 1.5 (24px), step 0.0625 (1px), default 1 (16px)
+export const FONT_SCALE_MIN = 0.75;
+export const FONT_SCALE_MAX = 1.5;
+export const FONT_SCALE_STEP = 0.0625;
+const FONT_SCALE_KEY = 'app_fontSizeScale';
+const loadFontSizeScale = (): number => {
+  try {
+    const stored = localStorage.getItem(FONT_SCALE_KEY);
+    if (stored !== null) {
+      const parsed = Number(stored);
+      if (parsed >= FONT_SCALE_MIN && parsed <= FONT_SCALE_MAX) return parsed;
+    }
+  } catch {}
+  return 1;
+};
 
 // ─── theme persists in localStorage ─────────────────────────────────────────
 const loadTheme = (): AppTheme => {
@@ -317,6 +336,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   mutedThreads: {},
   notifSettings: loadNotifSettings(),
   theme: loadTheme(),
+  fontSizeScale: loadFontSizeScale(),
   groupInfoCache: {},
   othersConversations: {},
   mergedInboxMode: false,
@@ -554,6 +574,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setTheme: (theme) => {
     try { localStorage.setItem('app_theme', theme); } catch {}
     set({ theme });
+  },
+
+  setFontSizeScale: (scale) => {
+    try { localStorage.setItem(FONT_SCALE_KEY, String(scale)); } catch {}
+    set({ fontSizeScale: scale });
+    document.documentElement.style.fontSize = `${16 * scale}px`;
   },
 
   // ─── Others folder ───────────────────────────────────────────────────

@@ -7,6 +7,8 @@ import { formatPhone } from '@/utils/phoneUtils';
 import PhoneDisplay from '../common/PhoneDisplay';
 import { showConfirm } from '../common/ConfirmDialog';
 import { extractApiError } from '@/utils/apiError';
+import ChannelBadge from '../common/ChannelBadge';
+import type { Channel } from '@/../configs/channelConfig';
 
 interface AccountCardProps {
   account: AccountInfo;
@@ -95,8 +97,10 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
         const res = await ipc.fb?.connect({ accountId: acc.zalo_id });
         if (res?.success) {
           updateAccountStatus(acc.zalo_id, true, true);
+          updateListenerActive(acc.zalo_id, true);
           showNotification('Kết nối Facebook thành công!', 'success');
         } else {
+          updateListenerActive(acc.zalo_id, false);
           showNotification(res?.error || 'Kết nối Facebook thất bại', 'error');
         }
         return;
@@ -260,7 +264,12 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
               ) : (acc.full_name || acc.zalo_id).charAt(0).toUpperCase()}
             </div>
           )}
+          {/* Status dot */}
           <span className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-gray-800 ${statusBadge.dot}`} />
+          {/* Channel badge */}
+          <div className="absolute -top-0.5 -left-0.5 z-10">
+            <ChannelBadge channel={(acc.channel || 'zalo') as Channel} size="xs" />
+          </div>
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-gray-200 truncate flex items-center gap-1.5">
@@ -362,6 +371,25 @@ export default function AccountCard({ account: acc, onReconnect, employeeChatOnl
                   <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
                 </svg>
                 Mở Chat
+              </button>
+
+              <button
+                onClick={() => {
+                  setMenuOpen(false);
+                  const uid = isFacebook ? (acc.facebook_id || acc.zalo_id) : acc.zalo_id;
+                  navigator.clipboard.writeText(uid).then(() => {
+                    showNotification('Đã sao chép UID: ' + uid, 'success');
+                  }).catch(() => {
+                    showNotification('Không thể sao chép UID', 'error');
+                  });
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-200 hover:bg-gray-700 transition-colors"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                </svg>
+                Copy UID
               </button>
 
               <div className="border-t border-gray-700 my-1" />

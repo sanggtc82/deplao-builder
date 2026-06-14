@@ -3,36 +3,11 @@ import * as jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import DatabaseService from '../database/DatabaseService';
 import Logger from '../../utils/Logger';
+import type { Employee, EmployeePermission, EmployeeWithDetails, EmployeeModule } from '../../models';
 
 const BCRYPT_ROUNDS = 12;
 const JWT_EXPIRES_IN = '7d';
 const ALL_MODULES = ['chat', 'friends', 'crm', 'workflow', 'integration', 'analytics', 'ai_assistant', 'settings'] as const;
-export type EmployeeModule = typeof ALL_MODULES[number];
-
-export interface Employee {
-    id?: number;
-    employee_id: string;
-    username: string;
-    password_hash: string;
-    display_name: string;
-    avatar_url: string;
-    role: 'boss' | 'employee';
-    is_active: number;
-    group_id: string | null;
-    created_at: number;
-    updated_at: number;
-    last_login: number | null;
-}
-
-export interface EmployeePermission {
-    module: EmployeeModule;
-    can_access: boolean;
-}
-
-export interface EmployeeWithDetails extends Employee {
-    permissions: EmployeePermission[];
-    assigned_accounts: string[];
-}
 
 class EmployeeService {
     private static instance: EmployeeService;

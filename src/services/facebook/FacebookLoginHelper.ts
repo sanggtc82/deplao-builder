@@ -60,12 +60,13 @@ function buildLoginResult(dataJson: any, statusLogin: 1 | 0, cookies?: string[])
   };
 }
 
-async function postLogin(data: Record<string, string>): Promise<any> {
+async function postLogin(data: Record<string, string>, httpsAgent?: any): Promise<any> {
   try {
     const body = new URLSearchParams(data).toString();
     const response = await axios.post(FB_AUTH_URL, body, {
       headers: AUTH_HEADERS,
       timeout: REQUEST_TIMEOUT,
+      ...(httpsAgent ? { httpsAgent } : {}),
     });
     return response.data;
   } catch (err: any) {
@@ -94,7 +95,8 @@ async function getToken2FA(key2FA: string): Promise<string> {
 export async function loginWithCredentials(
   username: string,
   password: string,
-  twoFASecret?: string
+  twoFASecret?: string,
+  httpsAgent?: any
 ): Promise<FBLoginResult> {
   const deviceId = generateDeviceId();
   const machineId = randStr(24);
@@ -141,7 +143,7 @@ export async function loginWithCredentials(
 
   // Step 1: Login with password
   const dataForm = baseForm(password, 'password', 1);
-  const dataJson = await postLogin(dataForm);
+  const dataJson = await postLogin(dataForm, httpsAgent);
   const error = dataJson?.error;
 
   // Success on first try
@@ -163,7 +165,7 @@ export async function loginWithCredentials(
   dataForm2FA.userid = String(errorData.uid || '');
   dataForm2FA.first_factor = String(errorData.login_first_factor || '');
 
-  const pass2FA = await postLogin(dataForm2FA);
+  const pass2FA = await postLogin(dataForm2FA, httpsAgent);
   if (pass2FA?.error) {
     return buildLoginResult(pass2FA, 0);
   }

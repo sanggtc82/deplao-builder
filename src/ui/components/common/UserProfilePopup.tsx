@@ -5,9 +5,11 @@
 import React from 'react';
 import { useChatStore } from '@/store/chatStore';
 import { useAppStore } from '@/store/appStore';
+import { useAccountStore } from '@/store/accountStore';
 import ipc from '@/lib/ipc';
 import PhoneDisplay from './PhoneDisplay';
 import GroupAvatarCommon from './GroupAvatar';
+import { FBUserProfilePopup } from './FBUserProfilePopup';
 
 // ─── ActionRow ────────────────────────────────────────────────────────────────
 export function ActionRow({ icon, label, onClick, textColor = 'text-gray-300' }: {
@@ -51,6 +53,24 @@ export function UserProfilePopup({ userId, anchorX, anchorY, contacts, activeAcc
 
   const isInGroup = !!(activeThreadId && /^\d{15,}$/.test(activeThreadId));
 
+  // ── Route Facebook contacts to FBUserProfilePopup ────────────────────────────
+  const contactChannel = contacts.find(c => c.contact_id === userId)?.channel || '';
+  const accountObj = useAccountStore.getState().accounts.find(a => a.zalo_id === activeAccountId);
+  const isFacebook = contactChannel === 'facebook' || accountObj?.channel === 'facebook';
+  if (isFacebook) {
+    return (
+      <FBUserProfilePopup
+        userId={userId}
+        anchorX={anchorX}
+        anchorY={anchorY}
+        contacts={contacts}
+        activeAccountId={activeAccountId}
+        activeThreadId={activeThreadId}
+        onClose={onClose}
+      />
+    );
+  }
+
   React.useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -76,6 +96,16 @@ export function UserProfilePopup({ userId, anchorX, anchorY, contacts, activeAcc
     if (contactInfo) {
       setUserInfo({ ...contactInfo });
       setAliasValue(contactInfo.display_name || '');
+    }
+    // Only fetch from Zalo API if the active account is Zalo
+    const activeAccount = activeAccountId
+      ? useAccountStore.getState().accounts.find(a => a.zalo_id === activeAccountId)
+      : null;
+    const isZaloAccount = (activeAccount?.channel || 'zalo') === 'zalo'
+      && (contactInfo?.channel || 'zalo') === 'zalo';
+    if (!isZaloAccount) {
+      setLoading(false);
+      return;
     }
     const load = async () => {
       setLoading(true);
@@ -118,10 +148,12 @@ export function UserProfilePopup({ userId, anchorX, anchorY, contacts, activeAcc
     load();
   }, [userId, activeAccountId]);
 
-  // Load mutual groups
+  // Load mutual groups — only for Zalo accounts
   React.useEffect(() => {
     setMutualGroupsLoading(true);
     setMutualGroups([]);
+    const contactChannel = contacts.find(c => c.contact_id === userId)?.channel || 'zalo';
+    if (contactChannel !== 'zalo') { setMutualGroupsLoading(false); return; }
     const loadGroups = async () => {
       try {
         const auth = await getAuth();

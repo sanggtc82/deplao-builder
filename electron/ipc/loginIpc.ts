@@ -226,6 +226,7 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
                 return {
                     ...acc,
                     proxy_id: (acc as any).proxy_id ?? null,
+                    listenerActive: !!(acc as any).listener_active,
                     isOnline: isFB
                         ? !!(fbUuid && FacebookConnectionManager.get(fbUuid)?.isConnected())
                         : ConnectionManager.isConnected(acc.zalo_id),
@@ -245,15 +246,31 @@ export function registerLoginIpc(mainWindow: BrowserWindow | null) {
     // ─── Xóa tài khoản ────────────────────────────────────────────────────
     ipcMain.handle('login:removeAccount', async (_event, { zaloId }) => {
         try {
-            const ZaloLoginHelper = require('../../src/utils/ZaloLoginHelper').default;
-            // Đánh dấu trước khi ngắt — ngăn auto-reconnect khi listener nhận close event
-            ZaloLoginHelper.markRemoved(zaloId);
+            // Check nếu là Facebook account → cleanup qua FacebookConnectionManager
+            const accounts = DatabaseService.getInstance().getAccounts();
+            const account = accounts.find((a: any) => a.zalo_id === zaloId);
+            const isFB = account?.channel === 'facebook';
 
-            // Disconnect
-            if (ConnectionManager.getConnection(zaloId)) {
-                await loginService.disconnectUser(zaloId);
+            if (isFB) {
+                // Facebook cleanup: tìm fb_account UUID → disconnect + xóa cookie + xóa fb_accounts
+                const fbAcc = DatabaseService.getInstance().getFBAccountByFacebookId(zaloId);
+                if (fbAcc?.id) {
+                    const FacebookConnectionManager = require('../../src/utils/FacebookConnectionManager').default;
+                    await FacebookConnectionManager.disconnect(fbAcc.id).catch(() => {});
+                    const { secureDelete } = require('../../src/services/secure/SecureSettingsService');
+                    secureDelete(`fb_cookie_${fbAcc.id}`);
+                    DatabaseService.getInstance().deleteFBAccount(fbAcc.id);
+                }
+            } else {
+                // Zalo cleanup (existing)
+                const ZaloLoginHelper = require('../../src/utils/ZaloLoginHelper').default;
+                ZaloLoginHelper.markRemoved(zaloId);
+                if (ConnectionManager.getConnection(zaloId)) {
+                    await loginService.disconnectUser(zaloId);
+                }
             }
-            // Mark as inactive in DB
+
+            // Mark as inactive in unified accounts table (cho cả Zalo và FB)
             DatabaseService.getInstance().deleteAccount(zaloId);
             return { success: true };
         } catch (error: any) {

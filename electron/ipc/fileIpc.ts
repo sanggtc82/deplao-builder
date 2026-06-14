@@ -161,12 +161,15 @@ export function registerFileIpc() {
     });
 
     /** Lưu base64 data thành file tạm để gửi ảnh clipboard */
-    ipcMain.handle('file:saveTempBlob', async (_event, { base64, ext }: { base64: string; ext: string }) => {
+    ipcMain.handle('file:saveTempBlob', async (_event, { base64, ext, filename }: { base64: string; ext: string; filename?: string }) => {
         try {
             const tmpDir = path.join(app.getPath('temp'), 'deplao-clipboard');
             if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-            const filename = `paste_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext || 'png'}`;
-            const filePath = path.join(tmpDir, filename);
+            // Preserve original filename if provided, otherwise generate random name
+            const safeName = filename
+                ? `${Date.now()}_${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+                : `paste_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext || 'png'}`;
+            const filePath = path.join(tmpDir, safeName);
             const buffer = Buffer.from(base64.replace(/^data:[^,]*,/, ''), 'base64');
             fs.writeFileSync(filePath, buffer);
             return { success: true, filePath };
@@ -409,5 +412,6 @@ export function registerFileIpc() {
 
         return { success: true, corrupted };
     });
+
 }
 

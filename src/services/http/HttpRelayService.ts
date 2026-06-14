@@ -464,6 +464,9 @@ class HttpRelayService {
         if (req.method === 'POST' && url === '/api/media/request') {
             return this.handleMediaRequest(req, res);
         }
+        if (req.method === 'POST' && url === '/api/media/upload') {
+            return this.handleMediaUpload(req, res);
+        }
 
         // ── Healthcheck ───────────────────────────────────────────────
         if (req.method === 'GET' && (url === '/api/health' || url === '/')) {
@@ -912,6 +915,50 @@ class HttpRelayService {
                     'Content-Length': stat.size,
                 });
                 fs.createReadStream(resolved).pipe(res);
+            } catch (err: any) {
+                this.json(res, 500, { success: false, error: err.message });
+            }
+        });
+    }
+
+    // ─── Media upload (Employee → Boss) ───────────────────────────────
+
+    /**
+     * Handle media file uploaded from Employee.
+     * Saves file to Boss local storage and returns the absolute path on Boss.
+     * Used when Employee's local file paths are invalid on Boss.
+     */
+    private handleMediaUpload(req: http.IncomingMessage, res: http.ServerResponse): void {
+        this.readBody(req, (body) => {
+            try {
+                const employee = this.authenticateRequest(req);
+                if (!employee) {
+                    return this.json(res, 401, { success: false, error: 'Unauthorized' });
+                }
+
+                const { base64, filename, zaloId } = JSON.parse(body);
+                if (!base64 || !filename) {
+                    return this.json(res, 400, { success: false, error: 'Missing base64 or filename' });
+                }
+
+                const fs = require('fs');
+                const path = require('path');
+                const buffer = Buffer.from(base64, 'base64');
+                const FileStorageService = require('../file/FileStorageService').default;
+
+                let bossPath: string;
+                if (zaloId) {
+                    // Save to account media directory (media/zaloId/date/filename)
+                    bossPath = FileStorageService.saveBuffer(zaloId, buffer, filename);
+                } else {
+                    // Fallback: save to a shared uploads directory
+                    const dir = path.join(FileStorageService.getBaseDir(), '_uploads');
+                    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                    bossPath = path.join(dir, filename);
+                    fs.writeFileSync(bossPath, buffer);
+                }
+
+                this.json(res, 200, { success: true, bossPath });
             } catch (err: any) {
                 this.json(res, 500, { success: false, error: err.message });
             }

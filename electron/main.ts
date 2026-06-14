@@ -31,6 +31,7 @@ import IntegrationRegistry from '../src/services/integrations/IntegrationRegistr
 import EventBroadcaster from '../src/services/event/EventBroadcaster';
 import CRMQueueService from '../src/services/crm/CRMQueueService';
 import FileStorageService from '../src/services/file/FileStorageService';
+import TrackingService from '../src/services/tracking/TrackingService';
 import { SHOW_DEV_TOOLS, IS_DEV_BUILD } from '../src/configs/BuildConfig';
 
 const isDev = IS_DEV_BUILD;
@@ -119,6 +120,9 @@ if (process.platform === 'win32') {
 // ─── Register custom protocol BEFORE app ready (required by Electron) ─────────
 // local-media://abs-path  →  serve file from absolute path on disk
 // Usage in renderer: local-media:///D:/path/to/file.jpg
+//
+// deplao://openChat?accountId=xxx&threadId=yyy&threadType=0&channel=zalo
+//   → deep link: mở app + active đúng hội thoại
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'local-media',
@@ -126,7 +130,17 @@ protocol.registerSchemesAsPrivileged([
       secure: true,
       supportFetchAPI: true,
       bypassCSP: true,
+      corsEnabled: true,
       stream: true,
+    },
+  },
+  {
+    scheme: 'deplao',
+    privileges: {
+      secure: true,
+      bypassCSP: true,
+      corsEnabled: true,
+      stream: false,
     },
   },
 ]);
@@ -313,11 +327,25 @@ function createWindow() {
   HttpConnectionManager.getInstance().setMainWindow(mainWindow);
 
   // Khi có instance thứ 2 cố mở → focus instance hiện tại
-  app.on('second-instance', () => {
+  // Trên Windows: deep link từ trình duyệt → argv chứa URL cần parse
+  app.on('second-instance', (_event, argv) => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       if (!mainWindow.isVisible()) mainWindow.show();
       mainWindow.focus();
+    }
+
+    // Parse deep link URL từ command line (Windows protocol handler)
+    const deepLinkUrl = argv.find((arg: string) => arg.startsWith('deplao://'));
+    if (deepLinkUrl) {
+      handleDeepLink(deepLinkUrl);
+    }
+  });
+
+  // macOS: open-url event khi click deep link
+  app.on('open-url', (_event, url) => {
+    if (url.startsWith('deplao://')) {
+      handleDeepLink(url);
     }
   });
 
@@ -537,6 +565,63 @@ function registerWindowControls() {
 }
 
 /**
+ * Xử lý deep link URL từ custom protocol deplao://
+ *
+ * Định dạng:
+ *   deplao://openChat?accountId=xxx&threadId=yyy&threadType=0&channel=zalo
+ *
+ * Hỗ trợ thêm action mới bằng cách mở rộng switch(action) bên dưới.
+ */
+function handleDeepLink(url: string): void {
+  try {
+    const parsed = new URL(url);
+    const action = parsed.hostname || parsed.pathname.replace(/^\//, '').split('?')[0];
+    const params = Object.fromEntries(parsed.searchParams.entries());
+
+    console.log(`[handleDeepLink] action="${action}" params=`, params);
+
+    switch (action) {
+      case 'openChat': {
+        const accountId = params.accountId || params.zaloId || '';
+        const threadId = params.threadId || '';
+        const threadType = parseInt(params.threadType || '0', 10);
+        const channel = params.channel || 'zalo';
+
+        if (!accountId || !threadId) {
+          console.warn('[handleDeepLink] Missing accountId or threadId');
+          return;
+        }
+
+        // Gọi lại logic giống notification click → focus + gửi IPC
+        if (!mainWindow) return;
+
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        if (!mainWindow.isVisible()) mainWindow.show();
+        mainWindow.setAlwaysOnTop(true);
+        mainWindow.focus();
+        setTimeout(() => { try { mainWindow?.setAlwaysOnTop(false); } catch {} }, 200);
+
+        setTimeout(() => {
+          try {
+            mainWindow?.webContents.send('app:openThread', {
+              zaloId: accountId,
+              threadId,
+              threadType,
+            });
+          } catch {}
+        }, 80);
+        break;
+      }
+
+      default:
+        console.warn(`[handleDeepLink] Unknown action: "${action}"`);
+    }
+  } catch (err: any) {
+    console.error('[handleDeepLink] Failed to parse URL:', url, err.message);
+  }
+}
+
+/**
  * Ordered startup: scan all workspaces, start relays + connect Zalo for local workspaces FIRST,
  * THEN connect remote/employee workspaces. Ensures Boss is ready before employees connect.
  */
@@ -633,8 +718,27 @@ app.whenReady().then(async () => {
     if (!fs.existsSync(filePath)) {
       return new Response('Not Found', { status: 404 });
     }
-    const normalised = filePath.replace(/\\/g, '/');
-    return net.fetch('file://' + (process.platform === 'win32' ? '/' : '') + normalised);
+
+    const absPath = path.resolve(filePath);
+    const ext = path.extname(absPath).toLowerCase();
+    const mimeTypes: Record<string, string> = {
+      '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+      '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4',
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+      '.gif': 'image/gif', '.webp': 'image/webp',
+    };
+    const contentType = mimeTypes[ext] || 'application/octet-stream';
+
+    const data = fs.readFileSync(absPath);
+    return new Response(data, {
+      status: 200,
+      headers: {
+        'Content-Type': contentType,
+        'Content-Length': String(data.length),
+        'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
   });
 
   // Initialize workspace manager (must be BEFORE database init)
@@ -673,10 +777,31 @@ app.whenReady().then(async () => {
 
 
   loadIcons();
+
+  // ── Register deplao:// as default protocol client ─────────────────────
+  // Cho phép OS mở app khi click link deplao:// trong trình duyệt
+  //
+  // ⚠️ Production: app đã đóng gói → setAsDefaultProtocolClient hoạt động đúng.
+  // ⚠️ Development: KHÔNG gọi setAsDefaultProtocolClient — dùng manual reg script
+  //    (xem hướng dẫn trong agents/references/deep-link-feature.md)
+  if (app.isPackaged) {
+    if (!app.isDefaultProtocolClient('deplao')) {
+      app.setAsDefaultProtocolClient('deplao');
+    }
+  }
+
   createWindow();
   createTray();
   registerWindowControls();
 
+  // ── Handle deep link từ initial launch (first instance) ──────────
+  // Khi click deplao:// link lần đầu:
+  //   - Production đúng: URL nằm ở process.argv[1] hoặc sau dấu `--`
+  //   - Dev / sai config: Electron nhận URL ở argv[1] thay vì main script path
+  const initialDeepLink = process.argv.find((arg) => arg.startsWith('deplao://'));
+  if (initialDeepLink) {
+    setTimeout(() => handleDeepLink(initialDeepLink), 3000);
+  }
 
   // Register all IPC handlers
   registerLoginIpc(mainWindow);
@@ -732,6 +857,15 @@ app.whenReady().then(async () => {
       WorkflowEngineService.getInstance()['triggerWorkflows']('trigger.payment', data);
     });
   }, 2500);
+
+  // Initialize Tracking Service (chỉ chạy trong production build)
+  setTimeout(() => {
+    try {
+      TrackingService.getInstance().start();
+    } catch (err: any) {
+      console.error('[main] TrackingService init error:', err.message);
+    }
+  }, 5000);
 
 
   // Check for updates
