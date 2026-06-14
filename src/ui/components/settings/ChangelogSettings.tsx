@@ -14,6 +14,20 @@ interface VersionEntry {
 // ─── Changelog data — thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.6.1',
+    date: '06/2026',
+    type: 'hotfix',
+    changes: [
+      {
+        category: 'fixed',
+        items: [
+          'Sửa lỗi production build không đóng gói được E2EE bridge binary',
+          'Script production giờ tự động build bridge trước khi đóng gói',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.6.0',
     date: '06/2026',
     type: 'major',

@@ -327,10 +327,24 @@ export function resolveE2EEBinaryPath(): string {
   const binaryName = isWindows ? 'fbchat-bridge-e2ee.exe' : 'fbchat-bridge-e2ee';
 
   if ((process as any).resourcesPath) {
-    const bundled = path.join((process as any).resourcesPath, binaryName);
+    const rp = (process as any).resourcesPath;
+    // 2a. Direct file in resources/
+    const bundled = path.join(rp, binaryName);
     if (require('fs').existsSync(bundled)) {
       return bundled;
     }
+    // 2b. Fallback: search subdirectories (electron-builder may nest extraResources)
+    try {
+      const entries = require('fs').readdirSync(rp, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const nested = path.join(rp, entry.name, binaryName);
+          if (require('fs').existsSync(nested)) {
+            return nested;
+          }
+        }
+      }
+    } catch { /* ignore readdir errors */ }
   }
 
   // 3. Development: look for it in build/ relative to project root
