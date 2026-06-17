@@ -181,7 +181,8 @@
         "deb"
       ],
       "icon": "resources/icons/icon.png",
-      "category": "Network"
+      "category": "Network",
+      "maintainer": "babyvibe <babyvibe@users.noreply.github.com>"
     }
   }
 }
