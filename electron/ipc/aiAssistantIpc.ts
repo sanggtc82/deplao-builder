@@ -131,10 +131,10 @@ export function registerAIAssistantIpc(): void {
   });
 
   // ─── Direct chat ──────────────────────────────────────────────────────────
-  ipcMain.handle('ai:chat', async (_e, { assistantId, messages, structured }: { assistantId: string; messages: any[]; structured?: boolean }) => {
+  ipcMain.handle('ai:chat', async (_e, { assistantId, messages, structured, maxTokens }: { assistantId: string; messages: any[]; structured?: boolean; maxTokens?: number }) => {
     try {
-      Logger.info(`[AIAssistantIpc] chat: assistantId=${assistantId}, messagesCount=${messages?.length}, structured=${!!structured}`);
-      const result = await AIAssistantService.getInstance().chat(assistantId, messages, !!structured);
+      Logger.info(`[AIAssistantIpc] chat: assistantId=${assistantId}, messagesCount=${messages?.length}, structured=${!!structured}, maxTokens=${maxTokens ?? 'default'}`);
+      const result = await AIAssistantService.getInstance().chat(assistantId, messages, !!structured, maxTokens);
       return { success: true, ...result };
     } catch (e: any) {
       const status = e.response?.status;

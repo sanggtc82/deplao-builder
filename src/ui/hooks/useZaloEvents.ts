@@ -367,6 +367,8 @@ export async function fetchContactInfo(zaloId: string, contactId: string): Promi
   try {
     const account = useAccountStore.getState().accounts.find((a) => a.zalo_id === zaloId);
     if (!account) return;
+    // Guard: fetchContactInfo chỉ dành cho Zalo contacts. FB contacts dùng getUserInfoFacebookHtml.
+    if ((account.channel || 'zalo') !== 'zalo') return;
     const auth = { cookies: account.cookies, imei: account.imei, userAgent: account.user_agent };
     const res = await ipc.zalo?.getUserInfo({ auth, userId: contactId });
 
@@ -417,6 +419,8 @@ export async function refreshContactAlias(zaloId: string, contactId: string): Pr
   try {
     const account = useAccountStore.getState().accounts.find((a) => a.zalo_id === zaloId);
     if (!account) return;
+    // Guard: chỉ Zalo contacts mới có alias từ Zalo API
+    if ((account.channel || 'zalo') !== 'zalo') return;
     const auth = { cookies: account.cookies, imei: account.imei, userAgent: account.user_agent };
     const res = await ipc.zalo?.getUserInfo({ auth, userId: contactId });
     const rawProfile = res?.response?.changed_profiles?.[contactId]

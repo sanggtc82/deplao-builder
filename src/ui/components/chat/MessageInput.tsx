@@ -2535,20 +2535,6 @@ export default function MessageInput() {
         </div>
       )}
 
-      {/* AI Quick Settings — always visible when AI is enabled */}
-      {activeAccountId && activeThreadId && !isAiSuggestDisabled(activeAccountId, activeThreadId) && (
-        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700">
-          <button
-            onClick={(e) => { e.stopPropagation(); setShowAiAssignmentPopup(true); }}
-            className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-blue-400 transition-colors cursor-pointer"
-            title="Tuỳ chỉnh trợ lý cho hội thoại này"
-          >
-            <span className="text-[12px]">⚙</span>
-            <span>Tuỳ chỉnh nhanh cho hội thoại hiện tại</span>
-          </button>
-        </div>
-      )}
-
       {/* AI Suggestions bar */}
       {activeAccountId && activeThreadId && !isAiSuggestDisabled(activeAccountId, activeThreadId) && (aiSuggestions.length > 0 || aiSuggestionsLoading) && (
         <div className="ai-suggestion-bar border-b overflow-x-auto">

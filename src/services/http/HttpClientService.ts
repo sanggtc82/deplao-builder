@@ -634,6 +634,42 @@ class HttpClientService {
             return;
         }
 
+        // ── Contact alias — persist + forward to employee renderer ──
+        if (channel === 'db:contactAliasChanged' && data) {
+            try {
+                const DatabaseService = require('../database/DatabaseService').default;
+                const WorkspaceManager = require('../../utils/WorkspaceManager').default;
+                const db = DatabaseService.getInstance();
+
+                let targetDbPath: string | null = null;
+                if (this.workspaceId) {
+                    const ws = WorkspaceManager.getInstance().getWorkspaceById(this.workspaceId);
+                    if (ws) targetDbPath = WorkspaceManager.getInstance().resolveDbPath(ws.dbPath || 'deplao-tool.db');
+                }
+                const runOnWsDb = (fn: () => void) => {
+                    if (targetDbPath && targetDbPath !== db.getDbPath()) {
+                        db.withDbPath(targetDbPath, fn);
+                    } else {
+                        fn();
+                    }
+                };
+                runOnWsDb(() => {
+                    if (data.ownerZaloId && data.contactId) {
+                        db.setContactAlias(data.ownerZaloId, data.contactId, data.alias);
+                    }
+                });
+
+                // Forward to renderer when this employee workspace is active
+                const activeWsId = WorkspaceManager.getInstance().getActiveWorkspaceId();
+                if (activeWsId === this.workspaceId) {
+                    EventBroadcaster.sendDirect(channel, data);
+                }
+            } catch (err: any) {
+                Logger.warn(`[HttpClientService] contactAliasChanged error: ${err.message}`);
+            }
+            return;
+        }
+
         // Persist conversation-level events from Boss to employee's local DB
         // (labels, pins, quick messages, CRM, pinned conversations, contact settings)
         if (HttpClientService.FORWARD_CHANNELS.includes(channel)) {
@@ -776,16 +812,6 @@ class HttpClientService {
                 runOnWsDb(() => {
                     if (data.ownerZaloId && data.contactId && data.flags) {
                         db.setContactFlags(data.ownerZaloId, data.contactId, data.flags);
-                    }
-                });
-                return;
-            }
-
-            // ── Contact alias ──
-            if (channel === 'db:contactAliasChanged' && data) {
-                runOnWsDb(() => {
-                    if (data.ownerZaloId && data.contactId) {
-                        db.setContactAlias(data.ownerZaloId, data.contactId, data.alias);
                     }
                 });
                 return;

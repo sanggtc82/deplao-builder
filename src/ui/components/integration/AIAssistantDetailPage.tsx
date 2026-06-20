@@ -161,8 +161,12 @@ function normalizeForAI(raw: any, platform: string) {
     image = raw.image || raw.image_url || raw.imageUrl || raw.thumbnail || '';
   }
   const nested = raw.product_info || raw.product || raw.item || {};
-  const id = String(raw.variation_id || raw.id || raw.productId || raw.product_id
-    || raw.item_id || raw.sku || raw.code || Math.random());
+  const primaryId = raw.variation_id || raw.id || raw.productId || raw.product_id
+    || raw.item_id || raw.sku || raw.code;
+  // Tạo _id unique: nếu có ID thật thì dùng, không thì tự sinh (tránh product_id/share ID gây trùng)
+  const id = primaryId
+    ? String(primaryId)
+    : `_auto_${(raw.name || '').slice(0, 6)}_${Math.random().toString(36).slice(2, 10)}`;
   const name = raw.name || raw.fullName || raw.title || raw.productName
     || raw.product_name || nested.name || nested.title || '';
   const price = raw.prices?.retail || raw.basePrice || raw.price || raw.retailPrice
@@ -460,12 +464,20 @@ export default function AIAssistantDetailPage({ assistantId, onBack }: Props) {
       code: p._code || p.code || p.sku || '',
       image: p._image || p.image || p.image_url || '',
     }));
+    let addedCount = 0;
     setPinnedProducts(prev => {
       const existIds = new Set(prev.map((x: any) => x.id));
-      const toAdd = newPinned.filter(x => !existIds.has(x.id));
+      // Dedup cả với prev lẫn trong cùng batch (tránh duplicate id → React key lỗi)
+      const batchIds = new Set<string>();
+      const toAdd = newPinned.filter(x => {
+        if (existIds.has(x.id) || batchIds.has(x.id)) return false;
+        batchIds.add(x.id);
+        return true;
+      });
+      addedCount = toAdd.length;
       return [...prev, ...toAdd];
     });
-    showNotification(`✅ Đã ghim ${newPinned.length} sản phẩm cho AI`, 'success');
+    showNotification(`✅ Đã ghim ${addedCount} sản phẩm cho AI`, 'success');
   };
 
   const handleUnpinProduct = (productId: string) => {

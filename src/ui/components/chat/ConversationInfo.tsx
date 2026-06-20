@@ -65,6 +65,10 @@ function UserConversationInfo() {
   const contactList = activeAccountId ? (contacts[activeAccountId] || []) : [];
   const contact = contactList.find((c) => c.contact_id === activeThreadId);
   const channelCap = getCapability((contact?.channel || 'zalo') as Channel);
+  // Kiểm tra thêm account channel để fallback đúng cho FB khi contact thiếu channel field
+  const activeAccount = getActiveAccount();
+  const effectiveChannel = (contact?.channel || activeAccount?.channel || 'zalo') as Channel;
+  const effectiveChannelCap = getCapability(effectiveChannel);
   // Hiển thị: ưu tiên alias → display_name
   const displayName = contact?.alias || contact?.display_name || activeThreadId || '';
   const avatarUrl = contact?.avatar_url || '';
@@ -240,7 +244,7 @@ function UserConversationInfo() {
 
   const handleTogglePin = async () => {
     if (!activeThreadId) return;
-    if (!channelCap.supportsPinConversation) {
+    if (!effectiveChannelCap.supportsPinConversation) {
       // FB / non-Zalo: use local pin only
       if (!activeAccountId) return;
       const newVal = !isLocalPinned;
@@ -555,10 +559,10 @@ function UserConversationInfo() {
             </div>
           )}
         </div>
-        {channelCap.supportsPinConversation && (
+        {effectiveChannelCap.supportsPinConversation && (
           <UserActionBtn icon={isPinned ? '📌' : '📍'} label={isPinned ? 'Bỏ ghim' : 'Ghim hội thoại'} onClick={handleTogglePin} active={isPinned} />
         )}
-        {!channelCap.supportsPinConversation && (
+        {!effectiveChannelCap.supportsPinConversation && (
           <UserActionBtn icon={isLocalPinned ? '🔖' : '📎'} label={isLocalPinned ? 'Bỏ ghim app' : 'Ghim trong app'} onClick={handleTogglePin} active={isLocalPinned} />
         )}
         {channelCap.supportsCreateGroup && (

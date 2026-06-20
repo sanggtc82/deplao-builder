@@ -296,7 +296,8 @@ class FileStorageService {
 
             const headers: Record<string, string> = {
                 'User-Agent': userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Referer': 'https://chat.zalo.me/',
+                // Facebook CDN can require facebook.com Referer (403 without it)
+                'Referer': cookiesJson ? 'https://www.facebook.com/' : 'https://chat.zalo.me/',
             };
             if (cookiesJson) {
                 const cookieHeader = this.buildCookieHeader(cookiesJson);

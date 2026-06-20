@@ -135,9 +135,11 @@ export class FacebookE2EEBridge extends EventEmitter {
     //
     this.process.stdout?.on('data', (chunk: Buffer) => {
       this.buffer += chunk.toString('utf8');
-      // Cap buffer at 1MB to prevent memory leak on malformed output
-      if (this.buffer.length > 1024 * 1024) {
-        Logger.warn('[FBE2EEBridge] Buffer exceeded 1MB — resetting');
+      // Cap buffer at 50MB — đủ cho E2EE media download (FB limit ~25MB/file,
+      // base64 ~33MB + JSON overhead). Không để unlimited vì bridge lỗi có thể
+      // sinh output vô tận gây OOM.
+      if (this.buffer.length > 1024 * 1024 * 50) {
+        Logger.warn('[FBE2EEBridge] Buffer exceeded 50MB — resetting');
         this.buffer = '';
         return;
       }

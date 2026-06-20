@@ -2534,6 +2534,12 @@ class DatabaseService {
             [ownerZaloId, threadId, limit, offset]
         );
         Logger.log(`[DB:getMessages] owner=${ownerZaloId} thread=${threadId} limit=${limit} offset=${offset} → ${msgs.length} msgs (first: ${msgs[0]?.msg_id || 'none'}, channel: ${msgs[0]?.channel || 'none'})`);
+        // Log local_paths for video messages to debug download persistence
+        for (const m of msgs) {
+          if (m.msg_type === 'video' || m.channel === 'facebook') {
+            Logger.log(`[DB:getMessages] DETAIL: msg_id=${m.msg_id} type=${m.msg_type} channel=${m.channel} local_paths=${m.local_paths || '(empty)'} is_sent=${m.is_sent}`);
+          }
+        }
         if (msgs.length === 0) {
             // Diagnostic: check if there are ANY messages for this owner or thread
             try {

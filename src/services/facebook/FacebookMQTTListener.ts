@@ -590,10 +590,12 @@ export class FacebookMQTTListener extends EventEmitter {
     }
 
     // 4e. Existing: message with body or attachments — parse attachment + emit
+    // Track attachment index for synthetic ID generation when no real fbid/ID exists
+    let _attIndex = 0;
     const parseAttachment = (att: any) => {
       // Sticker id nằm trong mercury.sticker_attachment.id, không phải outer att.id
       const stickerId = att?.mercury?.sticker_attachment?.id;
-      let id: string | number = att.fbid || att.id || stickerId || 0;
+      let id: string | number = att.fbid || att.id || stickerId || -(++_attIndex);
       let url: string | null = null;
       let attachmentType: string | undefined;
       let name: string | undefined;
@@ -614,12 +616,16 @@ export class FacebookMQTTListener extends EventEmitter {
           Logger.log(`[FBMqtt:${this.accountId}] [STICKER] parsed sticker: attId=${att.id || att.fbid} stickerId=${stickerId} url=${url?.slice(0,100)}`);
         } else if (typename === 'MessagePhoto' || typename === 'MessageAnimatedImage' || typename === 'MessageImage') {
           attachmentType = 'image';
-          url = blob?.large_preview?.uri || blob?.preview?.uri || blob?.thumbnail?.uri
+          // MessageAnimatedImage (GIF) typically has animated_image.uri or original_image.uri
+          // as the actual GIF URL, NOT in large_preview/preview/thumbnail (those are static previews)
+          url = blob?.animated_image?.uri || blob?.original_image?.uri
+             || blob?.large_preview?.uri || blob?.preview?.uri || blob?.thumbnail?.uri
              || sticker?.url || sticker?.preview_image?.uri || sticker?.image?.uri
              || att?.url || null;
         } else if (typename === 'MessageVideo') {
           attachmentType = 'video';
-          url = blob?.large_image?.uri || blob?.preview?.uri || null;
+          // playable_url la video that, large_image/preview chi la thumbnail
+          url = blob?.playable_url || blob?.browse_url || blob?.large_image?.uri || blob?.preview?.uri || null;
         } else if (typename === 'MessageAudio') {
           attachmentType = 'audio';
           url = blob?.playback_url || null;

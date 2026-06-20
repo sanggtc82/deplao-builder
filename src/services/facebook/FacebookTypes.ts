@@ -213,6 +213,8 @@ export interface FBMQTTMessage {
   messageID: string;
   replyToID: string;
   type: FBThreadType;
+  /** Message mentions */
+  mentions?: any[];
   /** Primary attachment (first one — backward compat) */
   attachments: FBMQTTAttachment;
   /** All attachments when message contains multiple (e.g. batch image send) */

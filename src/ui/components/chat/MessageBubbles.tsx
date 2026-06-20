@@ -484,19 +484,18 @@ function ZaloVideoBubble({ msg }: { msg: any }) {
 // Facebook videos have NO thumbnail, play inline <video> player
 function FacebookVideoBubble({ msg }: { msg: any }) {
   const [showPlayer, setShowPlayer] = React.useState(false);
-  let videoLocalPath = '';
+  const [loadingFailed, setLoadingFailed] = React.useState(false);
 
+  // Compute videoLocalPath first (needed by hook below)
+  let videoLocalPath = '';
   try {
     const lp: Record<string, string> = typeof msg.local_paths === 'string'
       ? JSON.parse(msg.local_paths || '{}') : (msg.local_paths || {});
-    // FB stores video in: lp.main (E2EE), lp.file (download), or att_N keys
     videoLocalPath = lp.file || lp.video || lp.main || '';
-    // Fallback: scan att_* keys (from downloadNonE2EEAttachments)
     if (!videoLocalPath) {
       const attKey = Object.keys(lp).find(k => k.startsWith('att_'));
       if (attKey) videoLocalPath = lp[attKey];
     }
-    // Fallback: localPath inside attachments (during temp sending state)
     if (!videoLocalPath) {
       try {
         const atts = JSON.parse(msg.attachments || '[]');
@@ -505,7 +504,18 @@ function FacebookVideoBubble({ msg }: { msg: any }) {
     }
   } catch {}
 
-  const videoUrl = videoLocalPath ? toLocalMediaUrl(videoLocalPath) : '';
+  // Nếu sau 8s mà vẫn chưa có videoUrl, đánh dấu loadingFailed
+  React.useEffect(() => {
+    if (!videoLocalPath && !loadingFailed) {
+      const timer = setTimeout(() => setLoadingFailed(true), 8000);
+      return () => clearTimeout(timer);
+    }
+  }, [videoLocalPath]);
+
+  // Kiểm tra file có đúng là video không (tránh play thumbnail JPG)
+  const isPlayableVideo = videoLocalPath && /\.(mp4|webm|mov|avi|mkv|ogg|m4v)$/i.test(videoLocalPath);
+  const videoUrl = isPlayableVideo ? toLocalMediaUrl(videoLocalPath) : '';
+  console.log(`[FacebookVideoBubble] msgId=${msg.msg_id} local_paths=${msg.local_paths} videoLocalPath=${videoLocalPath} isPlayableVideo=${isPlayableVideo} videoUrl=${videoUrl}`);
 
   // Inline player mode
   if (showPlayer && videoUrl) {
@@ -535,7 +545,8 @@ function FacebookVideoBubble({ msg }: { msg: any }) {
         </div>
       </div>
       <div className="absolute bottom-2 left-2">
-        {!videoUrl && <span className="text-[11px] text-yellow-300 bg-black/50 px-1.5 py-0.5 rounded">Đang tải...</span>}
+        {!videoUrl && !loadingFailed && <span className="text-[11px] text-yellow-300 bg-black/50 px-1.5 py-0.5 rounded">Đang tải...</span>}
+        {!videoUrl && loadingFailed && <span className="text-[11px] text-red-400 bg-black/50 px-1.5 py-0.5 rounded">Tải thất bại</span>}
       </div>
     </div>
   );
@@ -1538,6 +1549,7 @@ export function MessageBubble({ msg, isSelf, senderName, onManage, onView, onOpe
 
   const mt = msg.msg_type || '';
   const mc = msg.content || '';
+  console.log(`[MESSAGE_RENDER] msg_id=${msg.msg_id} msg_type=${mt} channel=${msg.channel} isSelf=${isSelf} sender_id=${msg.sender_id} content="${(mc||'').slice(0,30)}" local_paths=${typeof msg.local_paths === 'string' ? msg.local_paths.slice(0,80) : typeof msg.local_paths}`); // DEBUG FULL MSG
   const cls = isSelf
     ? 'bg-blue-600 text-white rounded-br-sm'
     : 'bg-gray-700 text-gray-200 rounded-bl-sm';

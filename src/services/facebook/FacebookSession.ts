@@ -11,6 +11,11 @@ import Logger from '../../utils/Logger';
 
 const FB_HOME_URL = 'https://www.facebook.com/';
 
+/** Các field bắt buộc phải parse được để session hợp lệ */
+const REQUIRED_SESSION_FIELDS: (keyof FBSessionData)[] = [
+  'fb_dtsg', 'jazoest', 'sessionID', 'FacebookID', 'clientRevision',
+];
+
 // Parse order: [name, startDelimiter, endDelimiter]
 const SESSION_FIELDS: [keyof FBSessionData, string, string][] = [
   ['fb_dtsg',         'DTSGInitialData",[],{"token":"', '"'],
@@ -21,6 +26,10 @@ const SESSION_FIELDS: [keyof FBSessionData, string, string][] = [
   ['FacebookID',      '"actorID":"',                     '"'],
   ['clientRevision',  'client_revision":',               ','],
 ];
+
+function hasValue(value: any): boolean {
+  return value != null && String(value).trim() !== '';
+}
 
 /**
  * Full browser-like headers cho Facebook requests
@@ -45,34 +54,73 @@ export function fbHeaders(cookie: string): Record<string, string> {
 
 /**
  * Fetch Facebook homepage HTML với đầy đủ headers
+ * @throws Error nếu HTTP request thất bại
  */
 export async function fetchFBHomepage(cookie: string, httpsAgent?: any): Promise<string> {
-  const response = await axios.get(FB_HOME_URL, {
-    headers: fbHeaders(cookie),
-    withCredentials: false,
-    timeout: 60000,
-    ...(httpsAgent ? { httpsAgent } : {}),
-  });
-  return response.data as string;
+  try {
+    const response = await axios.get(FB_HOME_URL, {
+      headers: fbHeaders(cookie),
+      withCredentials: false,
+      timeout: 60000,
+      ...(httpsAgent ? { httpsAgent } : {}),
+    });
+    return response.data as string;
+  } catch (err: any) {
+    const status = err.response?.status ?? '?';
+    const msg = err.message || 'Unknown error';
+    throw new Error(`[FacebookSession] Cannot fetch Facebook homepage (HTTP ${status}): ${msg}`);
+  }
 }
 
 /**
  * Khởi tạo session từ cookie string
- * Trả về FBSessionData với tất cả thông tin cần thiết cho mọi request
+ * Trả về FBSessionData với tất cả thông tin cần thiết cho mọi request.
+ *
+ * Port từ Python _core/_session.py dataGetHome() — bao gồm:
+ * - Parse tất cả session fields từ homepage HTML
+ * - Validate REQUIRED_SESSION_FIELDS
+ * - Throw error nếu thiếu field bắt buộc hoặc HTTP request thất bại
+ *
+ * @throws Error nếu không fetch được homepage hoặc thiếu session fields bắt buộc
  */
 export async function initSession(cookie: string, httpsAgent?: any): Promise<FBSessionData> {
-  const html = await fetchFBHomepage(cookie, httpsAgent);
+  let html: string;
+  try {
+    html = await fetchFBHomepage(cookie, httpsAgent);
+  } catch (err: any) {
+    Logger.error(err.message);
+    throw err;
+  }
+
   const result: Partial<FBSessionData> = {};
+  const parseErrors: string[] = [];
 
   for (const [name, start, end] of SESSION_FIELDS) {
     try {
       result[name] = dataSplit(html, start, end);
     } catch {
-      result[name] = `[Unable to parse ${name}]` as any;
+      parseErrors.push(name);
+      result[name] = null as any;
     }
   }
 
   result.cookieFacebook = cookie;
+
+  // Validate required fields (port từ Python REQUIRED_SESSION_FIELDS)
+  const missing = REQUIRED_SESSION_FIELDS.filter((f) => !hasValue(result[f]));
+  if (missing.length > 0) {
+    const errMsg = `[FacebookSession] Missing required session fields: ${missing.join(', ')}`
+      + (parseErrors.length > 0 ? ` (parse errors: ${parseErrors.join(', ')})` : '');
+    Logger.error(errMsg);
+    throw new Error(errMsg);
+  }
+
+  // Validate FacebookID là số (port từ Python)
+  const fbId = String(result.FacebookID || '').trim();
+  if (fbId && !fbId.match(/^\d+$/)) {
+    throw new Error(`[FacebookSession] FacebookID is not numeric: ${fbId}`);
+  }
+
   return result as FBSessionData;
 }
 
@@ -82,11 +130,8 @@ export async function initSession(cookie: string, httpsAgent?: any): Promise<FBS
  */
 export async function checkCookieAlive(cookie: string, httpsAgent?: any): Promise<boolean> {
   try {
-    const data = await initSession(cookie, httpsAgent);
-    const fbId = data.FacebookID;
-    if (!fbId || fbId.includes('Unable to parse') || !fbId.match(/^\d+$/)) {
-      return false;
-    }
+    await initSession(cookie, httpsAgent);
+    // initSession() đã validate required fields + FacebookID — nếu không throw là OK
     return true;
   } catch (err: any) {
     Logger.warn(`[FacebookSession] checkCookieAlive error: ${err.message}`);

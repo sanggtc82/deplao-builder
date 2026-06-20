@@ -156,7 +156,7 @@ export default function WorkflowAIDialog({ currentNodes, currentEdges, channel, 
         { role: 'user', content: prompt },
       ];
 
-      const res = await ipc.ai?.chat(selectedAssistantId, messages);
+      const res = await ipc.ai?.chat(selectedAssistantId, messages, false, 5000);
 
       if (!res?.success || !res.result) {
         setError(res?.error || 'AI không trả về kết quả');

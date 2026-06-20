@@ -417,7 +417,19 @@ VÍ DỤ ĐẦU RA ĐÚNG:
             timeout: 60000,
           }
         );
-        result = res.data.choices?.[0]?.message?.content?.trim() || '';
+        // Parse response: support nhiều format khác ngoài OpenAI chuẩn
+        let rawContent = res.data.choices?.[0]?.message?.content;
+        if (!rawContent) rawContent = res.data.choices?.[0]?.text;           // Completions API
+        if (!rawContent) rawContent = res.data?.content;                     // Flat response
+        if (!rawContent) rawContent = res.data?.response;                    // Custom servers
+        if (!rawContent) {
+          // Log response structure để debug (chỉ field names, ko log value)
+          const topKeys = Object.keys(res.data || {}).join(',');
+          const choice0 = res.data?.choices?.[0];
+          const choiceKeys = choice0 ? Object.keys(choice0).join(',') : 'none';
+          Logger.warn(`[AIAssistant] callLLM response empty, topKeys=[${topKeys}], choice0Keys=[${choiceKeys}]`);
+        }
+        result = (rawContent || '').trim();
         promptTokens = res.data.usage?.prompt_tokens || 0;
         completionTokens = res.data.usage?.completion_tokens || 0;
         totalTokens = res.data.usage?.total_tokens || (promptTokens + completionTokens);
@@ -477,7 +489,7 @@ YÊU CẦU BẮT BUỘC:
     ];
 
     try {
-      const { result } = await this.callLLM(assistant, messages, 500);
+      const { result } = await this.callLLM(assistant, messages, 1000);
       Logger.info(`[AIAssistant] getSuggestions raw result: ${result}`);
 
       // Try parsing as JSON array first (preferred format)
@@ -525,7 +537,7 @@ YÊU CẦU BẮT BUỘC:
    * Direct chat with AI assistant
    * @param structured - If true, use structured JSON output rules (text/image segments) same as workflow
    */
-  public async chat(assistantId: string, conversationMessages: Array<{ role: string; content: string }>, structured: boolean = false): Promise<{ result: string; totalTokens: number; promptTokens: number; completionTokens: number }> {
+  public async chat(assistantId: string, conversationMessages: Array<{ role: string; content: string }>, structured: boolean = false, maxTokensOverride?: number): Promise<{ result: string; totalTokens: number; promptTokens: number; completionTokens: number }> {
     const assistant = this.getAssistant(assistantId);
     if (!assistant) throw new Error('Trợ lý AI không tồn tại');
     if (!assistant.enabled) throw new Error('Trợ lý AI đã bị tắt');
@@ -539,7 +551,7 @@ YÊU CẦU BẮT BUỘC:
       })),
     ];
 
-    return await this.callLLM(assistant, messages);
+    return await this.callLLM(assistant, messages, maxTokensOverride);
   }
 
   /**

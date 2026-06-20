@@ -1360,6 +1360,11 @@ func (c *Client) extractE2EEVideoAttachment(vid *waConsumerApplication.ConsumerA
 	transport, err := vid.Decode()
 	if err == nil && transport != nil {
 		if ancillary := transport.GetAncillary(); ancillary != nil {
+				// Facebook sends GIFs as VideoMessage with GifPlayback=true
+				// (confirmed by mautrix-meta msgconv/from-whatsapp.go)
+				if ancillary.GetGifPlayback() {
+					att.Type = "gif"
+				}
 			att.Width = int(ancillary.GetWidth())
 			att.Height = int(ancillary.GetHeight())
 			att.Duration = int(ancillary.GetSeconds())
@@ -1369,6 +1374,10 @@ func (c *Client) extractE2EEVideoAttachment(vid *waConsumerApplication.ConsumerA
 				if ancillary := waTransport.GetAncillary(); ancillary != nil {
 					att.MimeType = ancillary.GetMimetype()
 					att.FileSize = int64(ancillary.GetFileLength())
+					// Handle images sent in video containers (mimeType starts with "image/")
+					if att.Type == "video" && strings.HasPrefix(ancillary.GetMimetype(), "image/") {
+						att.Type = "image"
+					}
 				}
 				if integral := waTransport.GetIntegral(); integral != nil {
 					att.MediaKey = integral.GetMediaKey()

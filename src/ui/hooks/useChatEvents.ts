@@ -134,6 +134,8 @@ export function useChatEvents(): void {
     const unsubMsg = ipc.on?.('fb:onMessage', (data: {
       fbAccountId: string;
       message: any;
+      contactName?: string;
+      contactAvatar?: string;
     }) => {
       const { fbAccountId, message } = data;
       if (!fbAccountId || !message?.messageID) return;
@@ -269,10 +271,37 @@ export function useChatEvents(): void {
       // Update contact (last message preview + time)
       store.updateContact(fbAccountId, {
         contact_id: threadId,
+        ...(data.contactName ? { display_name: data.contactName } : {}),
+        ...(data.contactAvatar ? { avatar_url: data.contactAvatar } : {}),
         last_message: lastMsgPreview,
         last_message_time: normalized.timestamp,
         channel: 'facebook',
       });
+
+      // ── FE fallback: nếu contact thiếu tên/avatar, tự fetch ────────────────
+      // BE đã fetch trước khi broadcast, nhưng nếu BE fetch fail (timeout/network)
+      // hoặc contact row chưa kịp tạo, FE tự xử lý để tránh hiển thị UID/avatar trống.
+      const rawSenderId = normalized.sender_id || message.userID;
+      if (rawSenderId && /^\d+$/.test(String(rawSenderId)) && !isSelf) {
+        const contactsList = useChatStore.getState().contacts[fbAccountId] || [];
+        const senderContact = contactsList.find(c => c.contact_id === rawSenderId);
+        const missingName = !senderContact?.display_name;
+        const missingAvatar = !senderContact?.avatar_url;
+        if (missingName || missingAvatar) {
+          (async () => {
+            try {
+              const result = await ipc.fb?.getUserInfoFacebookHtml({ accountId: fbAccountId, userId: String(rawSenderId) });
+              if (result?.success && (result.name || result.avatarUrl)) {
+                const patch: any = { contact_id: rawSenderId, channel: 'facebook' };
+                if (result.name) patch.display_name = result.name;
+                if (result.avatarUrl) patch.avatar_url = result.avatarUrl;
+                useChatStore.getState().updateContact(fbAccountId, patch);
+              }
+            } catch {}
+          })();
+        }
+      }
+      // ────────────────────────────────────────────────────────────────────────
 
       // Increment unread if not currently viewing this thread and not self-sent
       const currentActive = useChatStore.getState().activeThreadId;

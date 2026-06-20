@@ -146,7 +146,7 @@ function OverviewPanel() {
         <SectionTitle>✨ Tính năng nổi bật</SectionTitle>
         <div className="grid grid-cols-2 gap-2">
           {[
-            { icon: '👤', text: 'Đa tài khoản Zalo & FB' },
+            { icon: '👤', text: 'Đa tài khoản Zalo & Facebook' },
             { icon: '💬', text: 'Quản lý hội thoại tập trung' },
             { icon: '👥', text: 'CRM khách hàng' },
             { icon: '⚙️', text: 'Workflow tự động hoá' },

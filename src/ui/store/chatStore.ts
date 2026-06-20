@@ -222,6 +222,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           newMessages[dupIdx] = merged;
           return { messages: { ...state.messages, [key]: newMessages } };
         }
+        // Merge quote_data nếu tin nhắn mới có (từ persistSentMessage broadcast sau MQTT echo)
+        // Fix race: MQTT echo đến trước persistSentMessage → message vào store thiếu quote_data
+        if (message.quote_data && !existingMsg.quote_data) {
+          const merged = { ...existingMsg, quote_data: message.quote_data };
+          const newMessages = [...existing];
+          newMessages[dupIdx] = merged;
+          return { messages: { ...state.messages, [key]: newMessages } };
+        }
         return state;
       }
 

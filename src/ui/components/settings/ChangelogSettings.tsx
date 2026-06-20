@@ -14,6 +14,63 @@ interface VersionEntry {
 // ─── Changelog data — thêm entry mới vào ĐẦU mảng khi có bản cập nhật ────────
 const CHANGELOG: VersionEntry[] = [
   {
+    version: '26.6.5',
+    date: '06/2026',
+    type: 'minor',
+    highlights: [
+      '🖱️ Kéo chuột chọn nhiều tin nhắn — giữ và kéo qua nhiều tin để chọn hàng loạt',
+      '✏️ Sửa tên gợi nhớ trực tiếp từ ChatHeader — popup sửa alias nhanh, đồng bộ Zalo API',
+      '🎞️ Facebook xử lý hiển thị tin nhắn trích dẫn, video, gif ổn định hơn',
+      '🤖 AI hỗ maxTokens tuỳ chỉnh, suggestions 1000 tokens — sử dụng 9Router mượt mà hơn',
+    ],
+    changes: [
+      {
+        category: 'new',
+        items: [
+          'Kéo chuột chọn nhiều tin nhắn: pointerdown → drag → pointerup để chọn range tin nhắn, suppress click ngay sau drag',
+          'Sửa tên gợi nhớ trực tiếp từ ChatHeader — popup AliasEditPopup, gọi changeFriendAlias + setContactAlias, đồng bộ realtime',
+          'Ghim hội thoại local cho Facebook & các kênh không có Zalo API pin — dùng local_pinned_conversations, hiển thị trong GroupInfoPanel + ConversationInfo',
+        ],
+      },
+      {
+        category: 'improved',
+        items: [
+          'Facebook GIF: phát hiện GifPlayback từ E2EE bridge (Go events.go), hiển thị GIF animation thay vì ảnh tĩnh, xử lý ảnh gửi trong container video (mimeType image/)',
+          'Facebook video: loading timeout 8s với thông báo "Tải thất bại", skip URL thumbnail ảnh giả (.jpg/.png), fallback att_* keys từ downloadNonE2EEAttachments',
+          'Facebook pre-fetch contact info: tự động lấy display_name + avatar từ HTML trước khi broadcast fb:onMessage, FE fallback nếu BE fetch fail',
+          'Facebook contact info trong broadcast: gửi kèm contactName + contactAvatar để UI không hiển thị UID/avatar trống',
+          'Facebook E2EE: await handleIncomingMessage trước khi download media — tránh race event:localPath đến trước message store',
+          'Facebook E2EE bridge buffer: tăng 1MB → 50MB hỗ trợ E2EE media download (FB limit ~25MB/file)',
+          'Facebook ensureConnected: safety net listener alive sai status, thêm waitForListenerReady async poll, không reconnect khi MQTT thực sự alive',
+          'Facebook session: REQUIRED_SESSION_FIELDS validate trong initSession, throw error nếu thiếu FacebookID',
+          'Facebook sendMessage: detect 1:1 bằng numeric threadId, parse structured AI response giống zalo.sendMessage',
+          'Facebook download: Referer facebook.com cho FB CDN (tránh 403), DEBUG_DOWNLOAD logging chi tiết',
+          'AI: parse response đa format (OpenAI chat completions, Completions API text, flat content, custom response), log debug keys nếu response empty',
+          'AI: truyền maxTokens qua ai:chat IPC, WorkflowAIDialog dùng maxTokens=5000, suggestions tăng 500→1000 tokens',
+          'Workflow Facebook send: parse structured AI response (JSON segments), auto-resolve typeChat từ trigger context',
+          'AI Assistant product dedup: tránh duplicate ID trong cùng batch khi ghim sản phẩm',
+          'Contact alias relay: chuyển persist alias lên trước persistRelayConversationEvent, forward trực tiếp đến renderer',
+          'ZaloEvents guard: fetchContactInfo và refreshContactAlias chỉ chạy cho Zalo contacts',
+        ],
+      },
+      {
+        category: 'fixed',
+        items: [
+          'Sửa lỗi hiển thị UID thay vì tên trên tin nhắn Facebook mới — pre-fetch contact info trước broadcast, FE fallback',
+          'Sửa lỗi race condition E2EE media download: event:localPath đến trước khi message có trong store → local_paths bị mất, video không play được',
+          'Sửa lỗi quote_data bị mất khi MQTT echo đến trước persistSentMessage — merge quote_data trong chatStore',
+          'Sửa lỗi Facebook group bridge attachments không parse được — parse attachments array từ bridge data cho non-E2EE group messages',
+          'Sửa lỗi alias không đồng bộ qua relay cho nhân viên — sắp xếp thứ tự xử lý channel, forward trực tiếp',
+          'Sửa lỗi AI chat không parse được response từ server không chuẩn OpenAI format — thêm fallback các format khác',
+          'Sửa lỗi E2EE ảnh gửi trong container video không hiển thị — Go bridge detect mimeType image/ trong video container',
+          'Sửa lỗi Facebook MQTT attachment ID âm (0, -1, -2) — synthetic ID dùng negative index thay vì hardcode 0',
+          'Sửa lỗi Facebook group video không tải được — fallback att_* keys khi tìm local_paths',
+          'Sửa lỗi E2EE download lỗi âm thầm — catch + log chi tiết, thông báo bridge không hỗ trợ media type',
+        ],
+      },
+    ],
+  },
+  {
     version: '26.6.4',
     date: '06/2026',
     type: 'minor',

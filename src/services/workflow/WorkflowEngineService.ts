@@ -891,6 +891,7 @@ class WorkflowEngineService {
         isSelf: !!(msg.isSelf || data.isSelf),
         emoji: data.emoji || '',
         timestamp: Number(msg.timestamp || data.timestamp || msg.timestamp_precise || Date.now()),
+        typeChat: msg.type === 'user' ? 'user' : undefined,
       };
     }
     return { ...data };
@@ -2071,6 +2072,16 @@ class WorkflowEngineService {
         const targetThreadIds = this.resolveTargetThreadIds(cfg, ctx.trigger?.threadId);
         if (!targetThreadIds.length) throw new Error('[fb.action.sendMessage] threadId/threadIds required');
 
+        // Parse structured AI response (giống zalo.sendMessage) — nếu là JSON array segments
+        // thì join text lại thành 1 message, tránh gửi raw JSON ra cho khách
+        const segments = parseStructuredResponse(cfg.message);
+        const finalMessage = segments
+          ? segments
+              .filter((s: any) => s.type === 'text' && s.content)
+              .map((s: any) => String(s.content).trim())
+              .join('\n\n')
+          : String(cfg.message || '');
+
         const continueOnError = cfg.continueOnError === true;
         let lastResult: any = { success: false, error: 'Không gửi được đến hội thoại nào' };
         for (const tid of targetThreadIds) {
@@ -2078,8 +2089,8 @@ class WorkflowEngineService {
             const result = await FacebookSendService.sendTextMessage({
               accountId,
               threadId: tid,
-              body: String(cfg.message || ''),
-              typeChat: cfg.typeChat,
+              body: finalMessage || String(cfg.message || ''),
+              typeChat: cfg.typeChat || ctx.trigger?.typeChat,
               replyToMessageId: cfg.replyToMessageId,
             });
             lastResult = result;

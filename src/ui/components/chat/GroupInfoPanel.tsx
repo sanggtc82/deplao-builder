@@ -91,6 +91,7 @@ export default function GroupInfoPanel() {
   const [loading, setLoading] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
+  const [isLocalPinned, setIsLocalPinned] = useState(false);
   const [muteDropdownOpen, setMuteDropdownOpen] = useState(false);
   const [muteDropdownPos, setMuteDropdownPos] = useState<{ top: number; left: number } | null>(null);
   const [userProfilePopup, setUserProfilePopup] = useState<{ userId: string; x: number; y: number } | null>(null);
@@ -127,6 +128,14 @@ export default function GroupInfoPanel() {
     }).catch(() => {});
   }, [activeThreadId, channelCap.supportsPinConversation]);
 
+  // Load local pin status — cho FB và các kênh không hỗ trợ Zalo API pin
+  useEffect(() => {
+    if (!activeAccountId || !activeThreadId) return;
+    ipc.db?.getLocalPinnedConversations({ zaloId: activeAccountId })
+      .then((res: any) => setIsLocalPinned((res?.threadIds || []).includes(activeThreadId)))
+      .catch(() => {});
+  }, [activeAccountId, activeThreadId]);
+
 
   // Close mute dropdown on outside click
   useEffect(() => {
@@ -154,6 +163,18 @@ export default function GroupInfoPanel() {
       showNotification(isPinned ? 'Đã bỏ ghim hội thoại' : 'Đã ghim hội thoại', 'success');
     } catch (e: any) {
       showNotification(extractApiError(e, 'Ghim hội thoại thất bại'), 'error');
+    }
+  };
+
+  const handleToggleLocalPin = async () => {
+    if (!activeAccountId || !activeThreadId) return;
+    const newVal = !isLocalPinned;
+    try {
+      await ipc.db?.setLocalPinnedConversation({ zaloId: activeAccountId, threadId: activeThreadId, isPinned: newVal });
+      setIsLocalPinned(newVal);
+      showNotification(newVal ? 'Đã ghim trong app' : 'Đã bỏ ghim khỏi app', 'success');
+    } catch (e: any) {
+      showNotification('Lỗi: ' + (e.message || 'Không thể ghim hội thoại'), 'error');
     }
   };
 
@@ -559,6 +580,9 @@ export default function GroupInfoPanel() {
         </div>
         {channelCap.supportsPinConversation && (
           <GrpActionBtn icon={isPinned ? '📌' : '📍'} label={isPinned ? 'Bỏ ghim' : 'Ghim hội thoại'} onClick={handleTogglePin} active={isPinned} />
+        )}
+        {!channelCap.supportsPinConversation && (
+          <GrpActionBtn icon={isLocalPinned ? '🔖' : '📎'} label={isLocalPinned ? 'Bỏ ghim app' : 'Ghim trong app'} onClick={handleToggleLocalPin} active={isLocalPinned} />
         )}
         {channelCap.supportsInviteToGroup && (
           <GrpActionBtn icon="👥" label="Thêm thành viên" onClick={() => setAddMemberOpen(true)} />
